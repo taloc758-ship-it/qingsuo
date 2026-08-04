@@ -1,0 +1,953 @@
+{
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090"
+    }
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "socks-in",
+      "type": "socks"
+    },
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2081,
+      "tag": "http-in",
+      "type": "http"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "interval": "5m",
+      "outbounds": [
+        "node-01",
+        "node-02",
+        "node-03",
+        "node-04",
+        "node-05",
+        "node-06",
+        "node-07",
+        "node-08",
+        "node-09",
+        "node-10",
+        "node-11",
+        "node-12",
+        "node-13",
+        "node-14",
+        "node-15",
+        "node-16",
+        "node-17",
+        "node-18",
+        "node-19",
+        "node-20",
+        "node-21",
+        "node-22",
+        "node-23",
+        "node-24",
+        "node-25",
+        "node-26",
+        "node-27",
+        "node-28",
+        "node-29",
+        "node-30",
+        "node-31",
+        "node-32"
+      ],
+      "tag": "proxy-auto",
+      "tolerance": 50,
+      "type": "urltest",
+      "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "default": "proxy-auto",
+      "outbounds": [
+        "proxy-auto",
+        "node-01",
+        "node-02",
+        "node-03",
+        "node-04",
+        "node-05",
+        "node-06",
+        "node-07",
+        "node-08",
+        "node-09",
+        "node-10",
+        "node-11",
+        "node-12",
+        "node-13",
+        "node-14",
+        "node-15",
+        "node-16",
+        "node-17",
+        "node-18",
+        "node-19",
+        "node-20",
+        "node-21",
+        "node-22",
+        "node-23",
+        "node-24",
+        "node-25",
+        "node-26",
+        "node-27",
+        "node-28",
+        "node-29",
+        "node-30",
+        "node-31",
+        "node-32"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-01",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cghk1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cghk1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cghk1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-02",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cghk1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cghk1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cghk1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-03",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cghk1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cghk1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cghk1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-04",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cghk-2.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cghk-2.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cghk2",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-05",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgus1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgus1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgus1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-06",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgau1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgau1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgau1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-07",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgkr1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgkr1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgkr1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-08",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgkr2.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgkr2.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgkr2",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-09",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgde1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgde1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgde1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-10",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgae-1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgae-1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgae1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-11",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cggb1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cggb1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cggb1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-12",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgin1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgin1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgin1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-13",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgsg-1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgsg-1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgsg1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "xn--download-ne4yj89e.com",
+      "server_port": 443,
+      "tag": "node-14",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgjp1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgjp1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgjp1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-15",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "Hvq7_u1MMs_36hNrvv7blP7iSM8LDDc89O-vUOe7Ylo",
+          "short_id": "3fbac59e"
+        },
+        "server_name": "updates.cdn-apple.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-16",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "b_d9Th2sYPAM9VgMZ094oIeNIuUpcTA7ocDDDZdHImA",
+          "short_id": "790178d9"
+        },
+        "server_name": "iosapps.itunes.apple.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-17",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "yYOE5Rk92Y9IK5ysV14i3NX29n5oj-kJLzMDs2nzV3Y",
+          "short_id": "a6b457ee"
+        },
+        "server_name": "osxapps.itunes.apple.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-18",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "LRuaFspkM_ogrrpQVPyHf-BE2bNFmwQk6QaqUCI7nBw",
+          "short_id": "2ae44c71"
+        },
+        "server_name": "de43fa073e68de.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-19",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "GGaC1SFyvnzI7Y8-sWc732yrchCxAe5dITxTdM5YSBM",
+          "short_id": "84be2fbf"
+        },
+        "server_name": "www.apple.com.cn",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-20",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "co6hD0--O67ZNfwspsEQwYwT-mcEvtAk6oAs4Q8o4XE",
+          "short_id": "dcd73052"
+        },
+        "server_name": "gb43fa073e68de.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-21",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "zeRlOg05eKkzbyFkPMemCyqVogu5mWYy8TQeMndQgA0",
+          "short_id": "94667482"
+        },
+        "server_name": "inb3dd57b0b81c.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-22",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "zeRlOg05eKkzbyFkPMemCyqVogu5mWYy8TQeMndQgA0",
+          "short_id": "94667482"
+        },
+        "server_name": "inb3dd57b0b81c.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-23",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "zeRlOg05eKkzbyFkPMemCyqVogu5mWYy8TQeMndQgA0",
+          "short_id": "94667482"
+        },
+        "server_name": "inb3dd57b0b81c.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-24",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "tGn1hxCzV9Za2zImoInnXPk0g9sMA0rflkexwN22bXI",
+          "short_id": "f29882d3"
+        },
+        "server_name": "hkd6b6cb70958701.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-25",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "tGn1hxCzV9Za2zImoInnXPk0g9sMA0rflkexwN22bXI",
+          "short_id": "f29882d3"
+        },
+        "server_name": "hkd6b6cb70958701.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-26",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "yjHT9ERUz0-S8CCyUjnbfpxA8EaYdZuJNzFT3rf2S0M",
+          "short_id": "20793367"
+        },
+        "server_name": "sgd6b6cb70958701.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-27",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "yjHT9ERUz0-S8CCyUjnbfpxA8EaYdZuJNzFT3rf2S0M",
+          "short_id": "20793367"
+        },
+        "server_name": "sgd6b6cb70958701.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-28",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "wErZVMfXaR1PM725CnOACWfGOipYK_mQda1s56CFVzE",
+          "short_id": "89c54359"
+        },
+        "server_name": "jpd6b6cb70958701.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "packet_encoding": "xudp",
+      "server": "xmixx.cyberguard.games",
+      "server_port": 37000,
+      "tag": "node-29",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "reality": {
+          "enabled": true,
+          "public_key": "wErZVMfXaR1PM725CnOACWfGOipYK_mQda1s56CFVzE",
+          "short_id": "89c54359"
+        },
+        "server_name": "jpd6b6cb70958701.biliimg.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "ch-jp2.599789.xyz",
+      "server_port": 43229,
+      "tag": "node-30",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cghk1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cghk1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cghk1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "ch-jp2.599789.xyz",
+      "server_port": 26273,
+      "tag": "node-31",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cghk1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cghk1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cghk1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "flow": "",
+      "packet_encoding": "xudp",
+      "server": "ch-jp2.599789.xyz",
+      "server_port": 46346,
+      "tag": "node-32",
+      "tls": {
+        "enabled": true,
+        "insecure": false,
+        "server_name": "cgus1.xn--download-ne4yj89e.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "early_data_header_name": "Sec-WebSocket-Protocol",
+        "headers": {
+          "Host": [
+            "cgus1.xn--download-ne4yj89e.com"
+          ]
+        },
+        "max_early_data": 2048,
+        "path": "/cgus1",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "9a091df7-1834-4b76-9f88-09c6355e4f94"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  }
+}

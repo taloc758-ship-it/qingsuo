@@ -1,0 +1,36 @@
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+node_modules
+
+# Visual Studio cache files
+.vs/
+*.suo
+
+# Build outputs
+*.ilk
+*.obj
+*.pdb
+*.log
+*.tlog
+
+# NuGet packages
+packages/
+
+# User-specific files
+*.user
+ClientUI/nul
+Lib/
+*.exe
+*.exe~

@@ -57,16 +57,48 @@ type WhitelistResponse = {
   domains: string[]
 }
 
+type RouteRule = {
+  id: string
+  name: string
+  kind: string
+  value: string
+  outbound: string
+  source: string
+  editable: boolean
+}
+
+type RouteRulesResponse = {
+  rules: RouteRule[]
+}
+
+type AutoSwitchSettings = {
+  failoverOnly: boolean
+}
+
+type FailedNodeCleanupSettings = {
+  removeFailed: boolean
+}
+
 type NodeFilter = 'all' | 'gemini' | 'chatgpt' | 'both' | 'not-supported'
 type NodeSort = 'latency-asc' | 'latency-desc' | 'name'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
-  const body = await response.json()
-  if (!response.ok) {
-    throw new Error(body.error ?? 'Request failed')
+  const contentType = response.headers.get('content-type') ?? ''
+  const rawBody = await response.text()
+  let body: ({ error?: string } & T) | undefined
+  try {
+    body = contentType.includes('application/json') ? JSON.parse(rawBody) as { error?: string } & T : undefined
+  } catch {
+    throw new Error(`本地 Agent 返回了无效响应（HTTP ${response.status}），请刷新页面。`)
   }
-  return body as T
+  if (!response.ok) {
+    throw new Error(body?.error ?? (rawBody.trim() || `请求失败（HTTP ${response.status}）`))
+  }
+  if (!body) {
+    throw new Error(`本地 Agent 返回了非 JSON 响应（HTTP ${response.status}），请刷新页面。`)
+  }
+  return body
 }
 
 const Icon = {
@@ -98,7 +130,7 @@ export default function App() {
   const [logs, setLogs] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const [nodeFilter, setNodeFilter] = useState<NodeFilter>('all')
+  const [nodeFilter, setNodeFilter] = useState<NodeFilter>('both')
   const [nodeSort, setNodeSort] = useState<NodeSort>('latency-asc')
   const [whitelist, setWhitelist] = useState<string[]>([])
   const [whitelistDomain, setWhitelistDomain] = useState('')
@@ -106,17 +138,25 @@ export default function App() {
   const [autoScroll, setAutoScroll] = useState(true)
   const [editingDomain, setEditingDomain] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [routeRules, setRouteRules] = useState<RouteRule[]>([])
+  const [routeRulesModalOpen, setRouteRulesModalOpen] = useState(false)
+  const [routeSearch, setRouteSearch] = useState('')
+  const [autoSwitch, setAutoSwitch] = useState<AutoSwitchSettings>({ failoverOnly: false })
+  const [failedNodeCleanup, setFailedNodeCleanup] = useState<FailedNodeCleanupSettings>({ removeFailed: false })
   const logRef = useRef<HTMLPreElement>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, nextConfig, nextLogs, nextSubs, nextSystemProxy, nextWhitelist] = await Promise.all([
+      const [nextStatus, nextConfig, nextLogs, nextSubs, nextSystemProxy, nextWhitelist, nextRouteRules, nextAutoSwitch, nextFailedNodeCleanup] = await Promise.all([
         request<Status>('/api/status'),
         request<{ content: string }>('/api/config'),
         request<{ content: string }>('/api/logs'),
         request<SubscriptionsResponse>('/api/subscriptions'),
         request<SystemProxy>('/api/system-proxy'),
         request<WhitelistResponse>('/api/whitelist'),
+        request<RouteRulesResponse>('/api/route-rules'),
+        request<AutoSwitchSettings>('/api/auto-switch'),
+        request<FailedNodeCleanupSettings>('/api/failed-node-cleanup'),
       ])
       setStatus(nextStatus)
       setConfig((current) => current || nextConfig.content)
@@ -124,6 +164,9 @@ export default function App() {
       setSubscriptions(nextSubs.groups)
       setSystemProxy(nextSystemProxy)
       setWhitelist(nextWhitelist.domains)
+      setRouteRules(nextRouteRules.rules)
+      setAutoSwitch(nextAutoSwitch)
+      setFailedNodeCleanup(nextFailedNodeCleanup)
       if (nextSubs.groups.length > 0) {
         const nextNodes = await request<NodesResponse>('/api/nodes')
         setNodesState(nextNodes)
@@ -149,7 +192,11 @@ export default function App() {
 
   async function action(url: string) {
     setBusy(true); setMessage('')
-    try { await request<Status>(url, { method: 'POST' }); await refresh() }
+    try {
+      await request<Status>(url, { method: 'POST' })
+      if (url === '/api/stop') setMessage('代理已停止，Windows 系统代理已自动关闭。')
+      await refresh()
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : '操作失败') }
     finally { setBusy(false) }
   }
@@ -198,35 +245,50 @@ export default function App() {
     finally { setBusy(false) }
   }
 
-  async function autoSelect() {
+  async function toggleAutoSelection() {
     if (!displayGroup) return
-    if (nodeFilter === 'all') {
-      void chooseNode(displayGroup.id, 'auto')
+    if (displayGroup.mode !== 'auto' && displayGroup.active) {
+      await chooseNode(displayGroup.id, 'auto')
       return
     }
-    const candidates = visibleNodes ?? []
-    if (candidates.length === 0) {
-      setMessage('当前筛选下没有可用节点。')
+    if (!displayGroup.active) {
+      setMessage('当前自动节点仍在探测中，暂时无法固定。')
       return
     }
-    const tested = candidates.filter((n) => n.delayMs > 0).sort((a, b) => a.delayMs - b.delayMs)
-    if (tested.length > 0) {
-      setBusy(true); setMessage('')
-      try {
-        const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: displayGroup.id, mode: 'manual', tag: tested[0].tag }) })
-        setNodesState(result)
-        setMessage(`已根据筛选选择最优节点：${tested[0].name}（${tested[0].delayMs}ms）`)
-      } catch (error) { setMessage(error instanceof Error ? error.message : '切换失败') }
-      finally { setBusy(false) }
-    } else {
-      setMessage('正在测速，完成后请再次点击自动选择。')
-      void testNodes()
-    }
+    await chooseNode(displayGroup.id, 'manual', displayGroup.active)
   }
 
-  async function testNodes(tag?: string) {
+  async function toggleFailoverOnly() {
+    const next = !autoSwitch.failoverOnly
     setBusy(true); setMessage('')
-    try { await request(tag ? `/api/nodes/${encodeURIComponent(tag)}/test` : '/api/nodes/test', { method: 'POST' }); setMessage(tag ? '正在测速该节点，请稍候刷新结果。' : '正在并发测试全部节点，请稍候刷新结果。'); window.setTimeout(() => void refresh(), 1800) }
+    try {
+      const result = await request<AutoSwitchSettings>('/api/auto-switch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ failoverOnly: next }),
+      })
+      setAutoSwitch(result)
+      setMessage(result.failoverOnly ? '已启用故障才切换：当前节点可用时不会因延迟更低而切换。' : '已启用延迟优选：自动组会优先选择更低延迟节点。')
+      await refresh()
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动切换设置失败') }
+    finally { setBusy(false) }
+  }
+
+  async function toggleFailedNodeCleanup() {
+    const next = !failedNodeCleanup.removeFailed
+    setBusy(true); setMessage('')
+    try {
+      const result = await request<FailedNodeCleanupSettings>('/api/failed-node-cleanup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeFailed: next }),
+      })
+      setFailedNodeCleanup(result)
+      setMessage(result.removeFailed ? '已启用：测速失败的节点会从当前订阅组删除。' : '已关闭：测速失败的节点只标记为不可用。')
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新失败节点清理设置失败') }
+    finally { setBusy(false) }
+  }
+
+  async function testNodes(tag?: string, groupId = displayGroup?.id) {
+    setBusy(true); setMessage('')
+    if (!tag && !groupId) { setMessage('请先选择一个订阅分组。'); setBusy(false); return }
+    try { await request(tag ? `/api/nodes/${encodeURIComponent(tag)}/test` : `/api/groups/${encodeURIComponent(groupId!)}/nodes/test`, { method: 'POST' }); setMessage(tag ? '正在测速该节点，请稍候刷新结果。' : '正在并发测试当前分组全部节点，请稍候刷新结果。'); window.setTimeout(() => void refresh(), 1800) }
     catch (error) { setMessage(error instanceof Error ? error.message : '测速失败') }
     finally { setBusy(false) }
   }
@@ -264,8 +326,7 @@ export default function App() {
     if (!newDomain || oldDomain === newDomain) return
     setBusy(true); setMessage('')
     try {
-      await request(`/api/whitelist/${encodeURIComponent(oldDomain)}`, { method: 'DELETE' })
-      const result = await request<WhitelistResponse>('/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: newDomain }) })
+      const result = await request<WhitelistResponse>(`/api/whitelist/${encodeURIComponent(oldDomain)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: newDomain }) })
       setWhitelist(result.domains); setMessage(`已更新白名单：${oldDomain} → ${newDomain}`); await refresh()
     } catch (error) { setMessage(error instanceof Error ? error.message : '更新白名单失败') }
     finally { setBusy(false) }
@@ -303,12 +364,15 @@ export default function App() {
     return pct
   }
 
+  const customRouteRules = routeRules.filter((rule) => rule.editable && rule.value.toLowerCase().includes(routeSearch.trim().toLowerCase()))
+  const builtInRouteRules = routeRules.filter((rule) => !rule.editable)
+
   return (
     <main>
       <div className="topbar">
         <div className="brand">
           <div className="brand-mark"><Icon.Shield /></div>
-          <span className="brand-name">Sing-Box</span>
+          <span className="brand-name">青梭 QingSuo</span>
         </div>
         <div className="topbar-sep" />
         <span className={running ? 'pill on' : 'pill off'}>
@@ -357,40 +421,11 @@ export default function App() {
 
         <div className="sb-section">
           <div className="sb-label">路由规则</div>
-          <div className="wl-form">
-            <input type="text" value={whitelistDomain} disabled={busy} onChange={(e) => setWhitelistDomain(e.target.value)} placeholder="白名单域名..." onKeyDown={(e) => { if (e.key === 'Enter') void addWhitelist() }} />
-            <button className="ghost sm" disabled={busy || !whitelistDomain.trim()} onClick={() => void addWhitelist()}>添加</button>
-          </div>
-          {whitelist.length > 0 ? (
-            <>
-            <div className="wl-chips">
-              {whitelist.map((d) => (
-                <span className="chip" key={d}>
-                  {editingDomain === d ? (
-                    <input
-                      className="chip-edit"
-                      value={editValue}
-                      disabled={busy}
-                      autoFocus
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void editWhitelist(d, editValue.trim())
-                        if (e.key === 'Escape') setEditingDomain(null)
-                      }}
-                      onBlur={() => setEditingDomain(null)}
-                    />
-                  ) : (
-                    <span className="chip-text" onClick={() => { setEditingDomain(d); setEditValue(d) }}>{d}</span>
-                  )}
-                  <button className="x" disabled={busy} onClick={() => void deleteWhitelist(d)}><Icon.X /></button>
-                </span>
-              ))}
-            </div>
-            <div className="wl-hint">点击域名可编辑</div>
-            </>
-          ) : (
-            <div className="wl-empty">国内域名已自动直连 · 添加自定义域名走直连</div>
-          )}
+          <button className="route-rules-toggle ghost sm" onClick={() => setRouteRulesModalOpen(true)}>
+            <Icon.Layers /> 管理路由规则
+            <span className="route-rule-count">{whitelist.length} 条自定义</span>
+          </button>
+          <div className="route-sidebar-hint">大陆规则自动直连；未匹配的流量默认走代理。</div>
           {systemProxy?.supported && (
             <div className="sys-proxy" style={{ marginTop: '8px' }}>
               <div>
@@ -402,6 +437,58 @@ export default function App() {
           )}
         </div>
       </aside>
+      {routeRulesModalOpen && (
+        <div className="route-modal-backdrop" role="presentation" onMouseDown={() => { setRouteRulesModalOpen(false); setEditingDomain(null) }}>
+          <section className="route-modal" role="dialog" aria-modal="true" aria-label="管理路由规则" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="route-modal-head">
+              <div>
+                <h2>管理路由规则</h2>
+                <p>自定义白名单匹配域名和子域名并直连；未匹配流量默认走代理。</p>
+              </div>
+              <button className="ghost sm" onClick={() => { setRouteRulesModalOpen(false); setEditingDomain(null) }}><Icon.X /></button>
+            </header>
+            <div className="route-modal-body">
+              <section className="route-modal-section">
+                <div className="route-modal-section-title">添加直连白名单</div>
+                <div className="route-modal-add">
+                  <input type="text" value={whitelistDomain} disabled={busy} onChange={(e) => setWhitelistDomain(e.target.value)} placeholder="example.com、*.example.com 或 .vip" onKeyDown={(e) => { if (e.key === 'Enter') void addWhitelist() }} />
+                  <button disabled={busy || !whitelistDomain.trim()} onClick={() => void addWhitelist()}><Icon.Plus /> 添加</button>
+                </div>
+                <p className="route-modal-help">支持域名后缀：填入 <code>.vip</code> 或 <code>*.vip</code>，会匹配所有 <code>*.vip</code> 网站。</p>
+              </section>
+              <section className="route-modal-section">
+                <div className="route-modal-section-title">自定义白名单 <span>{whitelist.length} 条</span></div>
+                <input className="route-search" type="search" value={routeSearch} onChange={(e) => setRouteSearch(e.target.value)} placeholder="搜索自定义域名..." />
+                <div className="route-rules-list modal-list">
+                  {customRouteRules.length > 0 ? customRouteRules.map((rule) => (
+                    <div className="route-rule custom" key={rule.id}>
+                      <div className="route-rule-main">
+                        <span className="route-rule-name">直连域名</span>
+                        {editingDomain === rule.value ? (
+                          <input className="route-rule-edit-input" value={editValue} disabled={busy} autoFocus onChange={(e) => setEditValue(e.target.value)} onKeyDown={(e) => {
+                            if (e.key === 'Enter') void editWhitelist(rule.value, editValue.trim())
+                            if (e.key === 'Escape') setEditingDomain(null)
+                          }} />
+                        ) : <span className="route-rule-value" title={rule.value}>{rule.value}</span>}
+                      </div>
+                      <div className="route-rule-meta">
+                        <span>域名及子域名</span><span className="route-direct">直连</span>
+                        {editingDomain === rule.value ? <><button className="route-edit" disabled={busy || !editValue.trim()} onClick={() => void editWhitelist(rule.value, editValue.trim())}>保存</button><button className="route-edit" disabled={busy} onClick={() => setEditingDomain(null)}>取消</button></> : <><button className="route-edit" disabled={busy} onClick={() => { setEditingDomain(rule.value); setEditValue(rule.value) }}>编辑</button><button className="whitelist-delete" disabled={busy} onClick={() => void deleteWhitelist(rule.value)} title={`删除 ${rule.value}`}><Icon.Trash /></button></>}
+                      </div>
+                    </div>
+                  )) : <div className="route-list-empty">{routeSearch ? '没有匹配的自定义规则。' : '还没有自定义白名单。'}</div>}
+                </div>
+              </section>
+              <section className="route-modal-section">
+                <div className="route-modal-section-title">内置规则</div>
+                <div className="route-rules-list built-in-list">
+                  {builtInRouteRules.map((rule) => <div className="route-rule" key={rule.id}><div className="route-rule-main"><span className="route-rule-name">{rule.name}</span><span className="route-rule-value">{rule.value}</span></div><div className="route-rule-meta"><span>{rule.kind}</span><span className={rule.outbound === '直连' ? 'route-direct' : 'route-proxy'}>{rule.outbound}</span><span>内置，不可编辑</span></div></div>)}
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      )}
       <section className="nodes-area">
         <div className="nodes-head">
           <div className="nodes-head-row">
@@ -410,8 +497,37 @@ export default function App() {
               {displayGroup && <span className="muted">{displayGroup.mode === 'auto' ? '自动选优' : '手动'} · {displayGroup.active || '--'}</span>}
             </div>
             <div className="actions">
-              <button className="ghost sm" disabled={busy || !running} onClick={() => void autoSelect()}><Icon.Check /> 自动</button>
-              <button className="sm" disabled={busy || !running} onClick={() => void testNodes()}><Icon.Zap /> 测全部</button>
+              <div className="switch-inline auto-select-switch">
+                <span>自动选择</span>
+                <div
+                  className={`toggle ${displayGroup?.mode === 'auto' ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={displayGroup?.mode === 'auto'}
+                  aria-label="自动选择节点"
+                  onClick={() => !busy && running && void toggleAutoSelection()}
+                />
+              </div>
+              <div className="switch-inline auto-select-switch" title="只在当前自动节点不可用时才换节点">
+                <span>故障才切换</span>
+                <div
+                  className={`toggle ${autoSwitch.failoverOnly ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={autoSwitch.failoverOnly}
+                  aria-label="故障才切换"
+                  onClick={() => !busy && running && void toggleFailoverOnly()}
+                />
+              </div>
+              <div className="switch-inline auto-select-switch" title="测速失败后从订阅分组删除节点">
+                <span>失败自动删</span>
+                <div
+                  className={`toggle ${failedNodeCleanup.removeFailed ? 'on' : ''}`}
+                  role="switch"
+                  aria-checked={failedNodeCleanup.removeFailed}
+                  aria-label="测速失败自动删除节点"
+                  onClick={() => !busy && running && void toggleFailedNodeCleanup()}
+                />
+              </div>
+              <button className="sm" disabled={busy || !running || !displayGroup} onClick={() => void testNodes()} title="只测试当前订阅分组"><Icon.Zap /> 测全部</button>
             </div>
           </div>
           {hasSubscriptions && nodesState && (

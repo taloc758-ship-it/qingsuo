@@ -1,6 +1,6 @@
-# singbox-web
+# 青梭 QingSuo
 
-Small local Web control panel for a sing-box automatic proxy group.
+轻量的本地智能代理控制台，基于 sing-box 自动代理组运行。
 
 ## Prerequisites
 

@@ -19,12 +19,21 @@ func newTestApp(t *testing.T) *app {
 		config:        filepath.Join(dir, "config.json"),
 		binary:        filepath.Join(dir, "missing-sing-box.exe"),
 		subscriptions: filepath.Join(dir, "subscriptions.json"),
+		whitelist:     filepath.Join(dir, "whitelist.json"),
+		autoSwitch:    filepath.Join(dir, "auto-switch.json"),
+		nodeCleanup:   filepath.Join(dir, "failed-node-cleanup.json"),
 	}
 	if err := a.ensureConfig(); err != nil {
 		t.Fatalf("ensureConfig: %v", err)
 	}
 	if err := a.ensureSubscriptions(); err != nil {
 		t.Fatalf("ensureSubscriptions: %v", err)
+	}
+	if err := a.ensureWhitelist(); err != nil {
+		t.Fatalf("ensureWhitelist: %v", err)
+	}
+	if err := a.ensureAutoSwitchSettings(); err != nil {
+		t.Fatalf("ensure auto-switch settings: %v", err)
 	}
 	return a
 }
@@ -69,6 +78,28 @@ func TestAPIConfigSaveAndStartWithoutBinary(t *testing.T) {
 	}
 }
 
+func TestIsLocalProxyServer(t *testing.T) {
+	for value, want := range map[string]bool{
+		"127.0.0.1:2081":     true,
+		"LOCALHOST:2081":     true,
+		"127.0.0.1:7890":     false,
+		"proxy.example:2081": false,
+	} {
+		if got := isLocalProxyServer(value); got != want {
+			t.Fatalf("isLocalProxyServer(%q) = %t, want %t", value, got, want)
+		}
+	}
+}
+
+func TestFrontendHandlerServesEmbeddedIndex(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	frontendHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "<div id=\"root\"></div>") {
+		t.Fatalf("frontend response = %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestParseVLESSRealityAndWebSocket(t *testing.T) {
 	reality, err := parseVLESS("vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&security=reality&sni=example.org&fp=chrome&pbk=public-key&sid=abcd&flow=xtls-rprx-vision&type=tcp#Reality", 1)
 	if err != nil {
@@ -85,6 +116,27 @@ func TestParseVLESSRealityAndWebSocket(t *testing.T) {
 	transport := websocket.Outbound["transport"].(map[string]any)
 	if transport["type"] != "ws" || transport["path"] != "/ws" {
 		t.Fatalf("unexpected WebSocket transport: %#v", transport)
+	}
+}
+
+func TestParseVLESSDropsUnsupportedFlow(t *testing.T) {
+	node, err := parseVLESS("vless://11111111-1111-1111-1111-111111111111@example.com:443?encryption=none&security=reality&sni=example.org&pbk=public-key&flow=xtls-rprx-vision-udp44#UnsupportedFlow", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := node.Outbound["flow"]; exists {
+		t.Fatalf("unsupported flow was kept: %#v", node.Outbound)
+	}
+}
+
+func TestParseSingboxConfigDropsUnsupportedFlow(t *testing.T) {
+	content := `{"outbounds":[{"type":"vless","tag":"bad-flow","server":"example.com","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","flow":"xtls-rprx-vision-udp44"}]}`
+	nodes, err := parseSingboxConfigNodes(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := nodes[0].Outbound["flow"]; exists {
+		t.Fatalf("unsupported JSON flow was kept: %#v", nodes[0].Outbound)
 	}
 }
 
@@ -201,5 +253,135 @@ func TestClassifyNodeAvailability(t *testing.T) {
 		if result.Country != test.country || result.GeminiSupport != test.geminiSupport || result.ChatGPTSupport != test.chatGPTSupport {
 			t.Fatalf("classify %q = %#v", test.name, result)
 		}
+	}
+}
+
+func TestRouteRulesIncludeBuiltInsAndCustomWhitelist(t *testing.T) {
+	a := newTestApp(t)
+	rules := a.routeRules([]string{"example.com"})
+	if len(rules) != 6 {
+		t.Fatalf("expected 6 route rules, got %#v", rules)
+	}
+	custom := rules[4]
+	if custom.Value != "example.com" || !custom.Editable || custom.Outbound != "直连" {
+		t.Fatalf("unexpected custom route rule: %#v", custom)
+	}
+	if rules[len(rules)-1].Outbound != "代理" {
+		t.Fatalf("final route rule should proxy: %#v", rules[len(rules)-1])
+	}
+}
+
+func TestUpdateWhitelistIsAtomic(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.writeWhitelist([]string{"old.example"}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/api/whitelist/old.example", strings.NewReader(`{"domain":"new.example"}`))
+	response := httptest.NewRecorder()
+	a.handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("update status = %d: %s", response.Code, response.Body.String())
+	}
+	domains, err := a.readWhitelist()
+	if err != nil || len(domains) != 1 || domains[0] != "new.example" {
+		t.Fatalf("updated whitelist = %#v, %v", domains, err)
+	}
+}
+
+func TestNormalizeDomainSupportsSuffixWildcards(t *testing.T) {
+	for input, want := range map[string]string{
+		"*.vip":              ".vip",
+		"https://*.vip/path": ".vip",
+		".example.com":       ".example.com",
+		"foo*.example.com":   "",
+	} {
+		if got := normalizeDomain(input); got != want {
+			t.Fatalf("normalizeDomain(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestGroupDelayTestRouteRejectsUnknownGroup(t *testing.T) {
+	a := newTestApp(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/groups/missing/nodes/test", nil)
+	response := httptest.NewRecorder()
+	a.handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("missing subscription response = %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFailedNodeCleanupSettingsRoundTrip(t *testing.T) {
+	a := newTestApp(t)
+	want := failedNodeCleanupSettings{RemoveFailed: true}
+	if err := a.writeFailedNodeCleanupSettings(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.readFailedNodeCleanupSettings()
+	if err != nil || got != want {
+		t.Fatalf("cleanup settings = %#v, %v", got, err)
+	}
+}
+
+func TestPrepareSavedSelectionConfigUsesSavedActiveGroup(t *testing.T) {
+	a := newTestApp(t)
+	groups := []subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}},
+		{ID: "g2", Nodes: []vlessNode{{Tag: "g2-01", Outbound: map[string]any{"type": "vless", "tag": "g2-01"}}}},
+	}
+	if err := a.writeSubscriptions(groups); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.writeAutoSwitchSettings(autoSwitchSettings{
+		ActiveGroup: "g2",
+		Pinned:      map[string]string{"g2": "g2-01"},
+		Manual:      map[string]bool{"g2": true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.prepareSavedSelectionConfig(); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(a.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), `"default": "grp-g1"`) {
+		t.Fatalf("config did not preserve stable selector structure: %s", contents)
+	}
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil || settings.ActiveGroup != "g2" || !settings.Manual["g2"] || settings.Pinned["g2"] != "g2-01" {
+		t.Fatalf("saved selection changed unexpectedly: %#v, %v", settings, err)
+	}
+}
+
+func TestRemoveFailedNodesKeepsOneNode(t *testing.T) {
+	a := newTestApp(t)
+	groups := []subscriptionGroup{{
+		ID:    "g1",
+		Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}},
+	}}
+	if err := a.writeSubscriptions(groups); err != nil {
+		t.Fatal(err)
+	}
+	a.removeFailedNodes("g1", map[string]bool{"g1-01": true})
+	got, err := a.readSubscriptions()
+	if err != nil || len(got) != 1 || len(got[0].Nodes) != 1 {
+		t.Fatalf("all-failed group should stay intact: %#v, %v", got, err)
+	}
+}
+
+func TestBuildSubscriptionConfigFailoverOnlyUsesHighTolerance(t *testing.T) {
+	config, err := buildSubscriptionConfigWithSettings([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}},
+	}, nil, autoSwitchSettings{FailoverOnly: true, Pinned: map[string]string{"g1": "g1-01"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(config), `"tolerance": 65535`) {
+		t.Fatalf("failover-only tolerance missing from config: %s", config)
+	}
+	if !strings.Contains(string(config), `"default": "g1-01"`) {
+		t.Fatalf("failover-only selector did not pin node: %s", config)
 	}
 }

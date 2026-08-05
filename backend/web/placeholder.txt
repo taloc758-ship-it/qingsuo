@@ -1,0 +1,1 @@
+The portable package script writes the built React application into web/dist.

@@ -1,0 +1,14 @@
+{
+  "failoverOnly": true,
+  "activeGroup": "g1",
+  "pinned": {
+    "g1": "g1-27",
+    "g2": "g2-01",
+    "g3": "g3-114"
+  },
+  "manual": {
+    "g1": false,
+    "g2": false,
+    "g3": false
+  }
+}

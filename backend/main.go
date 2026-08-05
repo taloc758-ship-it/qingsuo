@@ -2,17 +2,19 @@ package main
 
 import (
 	"context"
-	_ "embed"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -27,10 +29,27 @@ const (
 	clashAPIURL    = "http://127.0.0.1:9090"
 	selectorTag    = "proxy"
 	latencyTestURL = "https://www.gstatic.com/generate_204"
+	// sing-box defines urltest tolerance as uint16. Its largest valid value is
+	// far above ordinary latency, so it prevents latency-only switching.
+	failoverTolerance = 65535
+	// In failover-only mode, probe the pinned automatic node regularly. Manual
+	// "test all" requests never use this path and therefore never switch nodes.
+	failoverCheckInterval = 30 * time.Second
+	delayTestConcurrency  = 32
 )
 
 //go:embed defaults/config.json
 var defaultConfig []byte
+
+// frontendFiles is replaced with the latest Vite build by package.ps1 before
+// compiling a portable release. The final executable then needs no Node.js.
+//
+//go:embed web
+var frontendFiles embed.FS
+
+// packagedBuild is set by package.ps1 so a portable executable keeps data
+// alongside itself. Development runs continue to use the working directory.
+var packagedBuild = "false"
 
 type app struct {
 	mu            sync.Mutex
@@ -39,12 +58,17 @@ type app struct {
 	binary        string
 	subscriptions string
 	whitelist     string
+	autoSwitch    string
+	nodeCleanup   string
 	cmd           *exec.Cmd
 	cancel        context.CancelFunc
 	started       time.Time
 	lastExit      string
 	logs          string
 	delays        map[string]int
+	failoverMu    sync.Mutex
+	cleanupMu     sync.Mutex
+	applyMu       sync.Mutex
 }
 
 type statusResponse struct {
@@ -60,6 +84,24 @@ type systemProxyResponse struct {
 	Supported bool   `json:"supported"`
 	Enabled   bool   `json:"enabled"`
 	Server    string `json:"server,omitempty"`
+}
+
+type autoSwitchSettings struct {
+	FailoverOnly bool `json:"failoverOnly"`
+	// ActiveGroup and the per-group selection maps make a user choice survive
+	// stopping the local core or restarting the web agent.
+	ActiveGroup string `json:"activeGroup,omitempty"`
+	// Pinned holds the node currently used by each automatic group in
+	// failover-only mode. Traffic goes through the selector directly, not the
+	// urltest outbound, so a latency measurement cannot replace it.
+	Pinned map[string]string `json:"pinned,omitempty"`
+	// Manual records groups explicitly selected by the user. A pinned group not
+	// marked manual is still in automatic mode and may be changed on failure.
+	Manual map[string]bool `json:"manual,omitempty"`
+}
+
+type failedNodeCleanupSettings struct {
+	RemoveFailed bool `json:"removeFailed"`
 }
 
 type configRequest struct {
@@ -132,6 +174,20 @@ type nodeStatus struct {
 	Error          string `json:"error,omitempty"`
 }
 
+type routeRule struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Value    string `json:"value"`
+	Outbound string `json:"outbound"`
+	Source   string `json:"source"`
+	Editable bool   `json:"editable"`
+}
+
+type routeRulesResponse struct {
+	Rules []routeRule `json:"rules"`
+}
+
 type nodeAvailability struct {
 	Country        string
 	GeminiSupport  string
@@ -183,6 +239,11 @@ func main() {
 	dataDir := os.Getenv("SINGBOX_WEB_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "data"
+		if packagedBuild == "true" {
+			if executable, err := os.Executable(); err == nil {
+				dataDir = filepath.Join(filepath.Dir(executable), "data")
+			}
+		}
 	}
 	absoluteDataDir, err := filepath.Abs(dataDir)
 	if err != nil {
@@ -195,6 +256,8 @@ func main() {
 		binary:        findBinary(absoluteDataDir),
 		subscriptions: filepath.Join(absoluteDataDir, "subscriptions.json"),
 		whitelist:     filepath.Join(absoluteDataDir, "whitelist.json"),
+		autoSwitch:    filepath.Join(absoluteDataDir, "auto-switch.json"),
+		nodeCleanup:   filepath.Join(absoluteDataDir, "failed-node-cleanup.json"),
 		delays:        make(map[string]int),
 	}
 	if err := application.ensureConfig(); err != nil {
@@ -206,6 +269,16 @@ func main() {
 	if err := application.ensureWhitelist(); err != nil {
 		log.Fatalf("prepare whitelist: %v", err)
 	}
+	if err := application.ensureAutoSwitchSettings(); err != nil {
+		log.Fatalf("prepare auto-switch settings: %v", err)
+	}
+	if err := application.ensureFailedNodeCleanupSettings(); err != nil {
+		log.Fatalf("prepare failed-node cleanup settings: %v", err)
+	}
+	if err := application.reconcileFailoverOnlyMode(); err != nil {
+		log.Printf("prepare failover-only mode: %v", err)
+	}
+	go application.runFailoverMonitor()
 
 	server := &http.Server{
 		Addr:              listenAddress,
@@ -215,6 +288,9 @@ func main() {
 
 	log.Printf("singbox-web API is listening on http://%s", listenAddress)
 	log.Printf("sing-box binary: %s", application.binary)
+	if shouldOpenBrowser() {
+		go openBrowser()
+	}
 	if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
@@ -230,18 +306,74 @@ func (a *app) handler() http.Handler {
 	mux.HandleFunc("POST /api/stop", a.handleStop)
 	mux.HandleFunc("GET /api/system-proxy", a.handleSystemProxyStatus)
 	mux.HandleFunc("POST /api/system-proxy", a.handleSystemProxyUpdate)
+	mux.HandleFunc("GET /api/auto-switch", a.handleAutoSwitchStatus)
+	mux.HandleFunc("POST /api/auto-switch", a.handleAutoSwitchUpdate)
+	mux.HandleFunc("GET /api/failed-node-cleanup", a.handleFailedNodeCleanupStatus)
+	mux.HandleFunc("POST /api/failed-node-cleanup", a.handleFailedNodeCleanupUpdate)
 	mux.HandleFunc("GET /api/subscriptions", a.handleListSubscriptions)
 	mux.HandleFunc("POST /api/subscriptions", a.handleImportSubscription)
 	mux.HandleFunc("POST /api/subscriptions/{id}/refresh", a.handleRefreshSubscription)
 	mux.HandleFunc("DELETE /api/subscriptions/{id}", a.handleDeleteSubscription)
 	mux.HandleFunc("GET /api/nodes", a.handleNodes)
-	mux.HandleFunc("POST /api/nodes/test", a.handleTestAllNodes)
+	mux.HandleFunc("POST /api/groups/{groupID}/nodes/test", a.handleTestGroupNodes)
 	mux.HandleFunc("POST /api/nodes/{tag}/test", a.handleTestNode)
 	mux.HandleFunc("POST /api/selection", a.handleSelection)
 	mux.HandleFunc("GET /api/whitelist", a.handleGetWhitelist)
 	mux.HandleFunc("POST /api/whitelist", a.handleAddWhitelist)
+	mux.HandleFunc("PUT /api/whitelist/{domain}", a.handleUpdateWhitelist)
 	mux.HandleFunc("DELETE /api/whitelist/{domain}", a.handleDeleteWhitelist)
+	mux.HandleFunc("GET /api/route-rules", a.handleRouteRules)
+	mux.Handle("/", frontendHandler())
 	return mux
+}
+
+func shouldOpenBrowser() bool {
+	for _, argument := range os.Args[1:] {
+		if argument == "--open" {
+			return true
+		}
+	}
+	return false
+}
+
+func openBrowser() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	time.Sleep(300 * time.Millisecond)
+	if err := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "http://127.0.0.1:8787/").Start(); err != nil {
+		log.Printf("open browser: %v", err)
+	}
+}
+
+func frontendHandler() http.Handler {
+	files, err := fs.Sub(frontendFiles, "web/dist")
+	if err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "frontend build is missing; run package.ps1", http.StatusServiceUnavailable)
+		})
+	}
+	fileServer := http.FileServer(http.FS(files))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path != "/" {
+			name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+			if _, err := fs.Stat(files, name); err != nil {
+				if strings.HasPrefix(name, "assets/") {
+					http.NotFound(w, r)
+					return
+				}
+				clone := r.Clone(r.Context())
+				clone.URL.Path = "/"
+				fileServer.ServeHTTP(w, clone)
+				return
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func findBinary(dataDir string) string {
@@ -424,6 +556,9 @@ func (a *app) start() error {
 	}
 	binary, config := a.binary, a.config
 	a.mu.Unlock()
+	if err := a.prepareSavedSelectionConfig(); err != nil {
+		return err
+	}
 
 	if _, err := os.Stat(binary); err != nil {
 		return fmt.Errorf("sing-box binary not found at %s; place it there or set SINGBOX_BINARY", binary)
@@ -486,6 +621,7 @@ func (a *app) start() error {
 		a.mu.Unlock()
 		a.appendLog("sing-box exited: " + exitMessage(err))
 	}()
+	go a.restoreSavedSelection()
 
 	return nil
 }
@@ -578,6 +714,15 @@ func (a *app) handleStart(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) handleStop(w http.ResponseWriter, _ *http.Request) {
+	// Only clear the system proxy when it is still pointing at this local
+	// instance. Do not overwrite a proxy configuration another app installed.
+	if proxy, err := systemProxyStatus(); err == nil && proxy.Enabled && isLocalProxyServer(proxy.Server) {
+		if err := setSystemProxy(false); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		a.appendLog("System proxy disabled before stopping sing-box.")
+	}
 	if err := a.stop(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -620,6 +765,64 @@ func (a *app) handleSystemProxyUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+func (a *app) handleAutoSwitchStatus(w http.ResponseWriter, _ *http.Request) {
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (a *app) handleAutoSwitchUpdate(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var settings autoSwitchSettings
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&settings); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	normalizeAutoSwitchSettings(&settings)
+	if settings.FailoverOnly {
+		// Preserve the currently selected node before rebuilding the group
+		// selector. The rebuilt selector will point to this node directly.
+		a.captureActiveSelection(&settings)
+	}
+	if err := a.writeAutoSwitchSettings(settings); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := a.applyAutoSwitchSettings(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.appendLog(fmt.Sprintf("Automatic switching mode set to %s.", map[bool]string{true: "failover-only", false: "latency-optimized"}[settings.FailoverOnly]))
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (a *app) handleFailedNodeCleanupStatus(w http.ResponseWriter, _ *http.Request) {
+	settings, err := a.readFailedNodeCleanupSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (a *app) handleFailedNodeCleanupUpdate(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var settings failedNodeCleanupSettings
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&settings); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.writeFailedNodeCleanupSettings(settings); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.appendLog(fmt.Sprintf("Remove failed nodes after delay tests: %t.", settings.RemoveFailed))
+	writeJSON(w, http.StatusOK, settings)
+}
+
 func systemProxyStatus() (systemProxyResponse, error) {
 	if runtime.GOOS != "windows" {
 		return systemProxyResponse{Supported: false}, nil
@@ -636,6 +839,11 @@ func systemProxyStatus() (systemProxyResponse, error) {
 		server = fields[len(fields)-1]
 	}
 	return systemProxyResponse{Supported: true, Enabled: enabled, Server: server}, nil
+}
+
+func isLocalProxyServer(server string) bool {
+	server = strings.TrimSpace(strings.ToLower(server))
+	return server == "127.0.0.1:2081" || server == "localhost:2081"
 }
 
 func setSystemProxy(enabled bool) error {
@@ -717,7 +925,11 @@ func (a *app) handleNodes(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, response)
 }
-func (a *app) handleTestAllNodes(w http.ResponseWriter, _ *http.Request) {
+
+// handleTestGroupNodes measures every node in the requested subscription
+// group. It intentionally never submits tests for nodes from other groups.
+func (a *app) handleTestGroupNodes(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("groupID")
 	groups, err := a.readSubscriptions()
 	if err != nil || len(groups) == 0 {
 		writeError(w, http.StatusBadRequest, errors.New("import a subscription before testing nodes"))
@@ -728,14 +940,19 @@ func (a *app) handleTestAllNodes(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	count := 0
-	for _, group := range groups {
-		for _, node := range group.Nodes {
-			a.testNodeAsync(node.Tag)
-			count++
-		}
+	idx := findGroup(groups, groupID)
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, errors.New("subscription group not found"))
+		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]int{"testing": count})
+	cleanup, err := a.readFailedNodeCleanupSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	group := groups[idx]
+	go a.testGroupNodes(group.ID, group.Nodes, cleanup.RemoveFailed)
+	writeJSON(w, http.StatusAccepted, map[string]int{"testing": len(group.Nodes)})
 }
 
 func (a *app) handleTestNode(w http.ResponseWriter, r *http.Request) {
@@ -746,9 +963,11 @@ func (a *app) handleTestNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	found := false
+	groupID := ""
 	for _, group := range groups {
 		if hasNodeVless(group.Nodes, tag) {
 			found = true
+			groupID = group.ID
 			break
 		}
 	}
@@ -760,7 +979,12 @@ func (a *app) handleTestNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("start sing-box before testing nodes"))
 		return
 	}
-	a.testNodeAsync(tag)
+	cleanup, err := a.readFailedNodeCleanupSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.testNodeAsync(groupID, tag, cleanup.RemoveFailed)
 	writeJSON(w, http.StatusAccepted, map[string]string{"testing": tag})
 }
 
@@ -787,6 +1011,11 @@ func (a *app) handleSelection(w http.ResponseWriter, r *http.Request) {
 	}
 	group := groups[idx]
 	target := autoTagFor(group.ID)
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if request.Mode == "manual" {
 		if !hasNodeVless(group.Nodes, request.Tag) {
 			writeError(w, http.StatusBadRequest, errors.New("select a node from this subscription group"))
@@ -796,8 +1025,15 @@ func (a *app) handleSelection(w http.ResponseWriter, r *http.Request) {
 	} else if request.Mode != "auto" {
 		writeError(w, http.StatusBadRequest, errors.New("mode must be auto or manual"))
 		return
+	} else if settings.FailoverOnly {
+		// Keep automatic mode on one concrete node. Using the urltest outbound
+		// here would let any latency request choose another member.
+		target, err = a.failoverTarget(group, settings)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
-
 	// Switch the active group, then pick auto or a specific node within it.
 	if err := a.setProxy(selectorTag, groupTagFor(group.ID)); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -805,6 +1041,21 @@ func (a *app) handleSelection(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.setProxy(groupTagFor(group.ID), target); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	normalizeAutoSwitchSettings(&settings)
+	settings.ActiveGroup = group.ID
+	if request.Mode == "manual" {
+		settings.Pinned[group.ID] = target
+		settings.Manual[group.ID] = true
+	} else {
+		settings.Manual[group.ID] = false
+		if settings.FailoverOnly {
+			settings.Pinned[group.ID] = target
+		}
+	}
+	if err := a.writeAutoSwitchSettings(settings); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	a.appendLog(fmt.Sprintf("Selected group %s (%s).", group.ID, target))
@@ -822,6 +1073,7 @@ func (a *app) nodesStatus() (nodeStatusResponse, error) {
 	activeGroup := ""
 	mode := make(map[string]string)
 	active := make(map[string]string)
+	settings, _ := a.readAutoSwitchSettings()
 	if response.Running {
 		if selected, err := a.activeProxy(selectorTag); err == nil {
 			activeGroup = groupIDFromTag(selected)
@@ -834,7 +1086,11 @@ func (a *app) nodesStatus() (nodeStatusResponse, error) {
 						active[activeGroup] = auto
 					}
 				} else if picked != "" {
-					mode[activeGroup] = "manual"
+					if settings.FailoverOnly && !settings.Manual[activeGroup] && settings.Pinned[activeGroup] == picked {
+						mode[activeGroup] = "auto"
+					} else {
+						mode[activeGroup] = "manual"
+					}
 					active[activeGroup] = picked
 				}
 			}
@@ -886,20 +1142,416 @@ func classifyNodeAvailability(name string) nodeAvailability {
 	}
 }
 
-func (a *app) testNodeAsync(tag string) {
+func (a *app) testNodeAsync(groupID, tag string, removeFailed bool) {
 	go func() {
 		result, err := a.delayTest(tag)
-		a.mu.Lock()
-		if err == nil {
-			a.delays[tag] = result
-		} else {
-			a.delays[tag] = -1
-		}
-		a.mu.Unlock()
+		a.recordDelay(tag, result, err)
 		if err != nil {
 			a.appendLog(fmt.Sprintf("Delay test %s failed: %v", tag, err))
+			if removeFailed {
+				a.removeFailedNodes(groupID, map[string]bool{tag: true})
+			}
 		}
 	}()
+}
+
+// testGroupNodes limits concurrent probes, then applies all deletions in one
+// configuration rebuild so the proxy only restarts once per full-group test.
+func (a *app) testGroupNodes(groupID string, nodes []vlessNode, removeFailed bool) {
+	failed := make(map[string]bool)
+	var failedMu sync.Mutex
+	var workers sync.WaitGroup
+	jobs := make(chan vlessNode)
+	workerCount := delayTestConcurrency
+	if len(nodes) < workerCount {
+		workerCount = len(nodes)
+	}
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for node := range jobs {
+				delay, err := a.delayTest(node.Tag)
+				a.recordDelay(node.Tag, delay, err)
+				if err != nil {
+					a.appendLog(fmt.Sprintf("Delay test %s failed: %v", node.Tag, err))
+					if removeFailed {
+						failedMu.Lock()
+						failed[node.Tag] = true
+						failedMu.Unlock()
+					}
+				}
+			}
+		}()
+	}
+	for _, node := range nodes {
+		jobs <- node
+	}
+	close(jobs)
+	workers.Wait()
+	if removeFailed {
+		a.removeFailedNodes(groupID, failed)
+	}
+}
+
+func (a *app) removeFailedNodes(groupID string, failed map[string]bool) {
+	if len(failed) == 0 {
+		return
+	}
+	a.cleanupMu.Lock()
+	defer a.cleanupMu.Unlock()
+
+	groups, err := a.readSubscriptions()
+	if err != nil {
+		a.appendLog(fmt.Sprintf("Could not remove failed nodes: %v", err))
+		return
+	}
+	idx := findGroup(groups, groupID)
+	if idx < 0 {
+		return
+	}
+	kept := make([]vlessNode, 0, len(groups[idx].Nodes))
+	for _, node := range groups[idx].Nodes {
+		if !failed[node.Tag] {
+			kept = append(kept, node)
+		}
+	}
+	if len(kept) == len(groups[idx].Nodes) {
+		return
+	}
+	if len(kept) == 0 {
+		a.appendLog(fmt.Sprintf("Keeping %s: all %d nodes failed the delay test, so the group was not deleted.", groupID, len(failed)))
+		return
+	}
+	removed := len(groups[idx].Nodes) - len(kept)
+	groups[idx].Nodes = kept
+	groups[idx].UpdatedAt = time.Now()
+	// Keep failover-only automatic mode coherent if its pinned node was one of
+	// the deleted members. Manual selections remain manual after this update.
+	if settings, err := a.readAutoSwitchSettings(); err == nil {
+		normalizeAutoSwitchSettings(&settings)
+		if failed[settings.Pinned[groupID]] {
+			settings.Pinned[groupID] = kept[0].Tag
+			if err := a.writeAutoSwitchSettings(settings); err != nil {
+				a.appendLog(fmt.Sprintf("Could not update the replacement node for %s: %v", groupID, err))
+				return
+			}
+		}
+	}
+	if err := a.applyGroups(groups); err != nil {
+		a.appendLog(fmt.Sprintf("Could not remove %d failed nodes from %s: %v", removed, groupID, err))
+		return
+	}
+	a.mu.Lock()
+	for tag := range failed {
+		delete(a.delays, tag)
+	}
+	a.mu.Unlock()
+	a.appendLog(fmt.Sprintf("Removed %d failed nodes from %s after delay tests.", removed, groupID))
+}
+
+func (a *app) recordDelay(tag string, delay int, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err == nil {
+		a.delays[tag] = delay
+		return
+	}
+	a.delays[tag] = -1
+}
+
+func normalizeAutoSwitchSettings(settings *autoSwitchSettings) {
+	if settings.Pinned == nil {
+		settings.Pinned = make(map[string]string)
+	}
+	if settings.Manual == nil {
+		settings.Manual = make(map[string]bool)
+	}
+}
+
+func hasNodeTag(nodes []vlessNode, tag string) bool {
+	for _, node := range nodes {
+		if node.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// captureActiveSelection converts the live selection into a pinned node before
+// changing the configuration. This avoids a restart falling back to urltest.
+func (a *app) captureActiveSelection(settings *autoSwitchSettings) {
+	selectedGroup, err := a.activeProxy(selectorTag)
+	if err != nil {
+		return
+	}
+	groupID := groupIDFromTag(selectedGroup)
+	if groupID == "" {
+		return
+	}
+	groups, err := a.readSubscriptions()
+	if err != nil {
+		return
+	}
+	idx := findGroup(groups, groupID)
+	if idx < 0 {
+		return
+	}
+	picked, err := a.activeProxy(groupTagFor(groupID))
+	if err != nil || picked == "" {
+		return
+	}
+	manual := picked != autoTagFor(groupID)
+	if !manual {
+		picked, err = a.activeProxy(autoTagFor(groupID))
+		if err != nil || picked == "" {
+			return
+		}
+	}
+	if !hasNodeTag(groups[idx].Nodes, picked) {
+		return
+	}
+	normalizeAutoSwitchSettings(settings)
+	settings.Pinned[groupID] = picked
+	settings.Manual[groupID] = manual
+}
+
+// reconcileFailoverOnlyMode preserves an existing sing-box selection when the
+// web agent is upgraded, then writes a selector that uses that node directly.
+func (a *app) reconcileFailoverOnlyMode() error {
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil || !settings.FailoverOnly {
+		return err
+	}
+	normalizeAutoSwitchSettings(&settings)
+	a.captureActiveSelection(&settings)
+	if err := a.writeAutoSwitchSettings(settings); err != nil {
+		return err
+	}
+	groups, err := a.readSubscriptions()
+	if err != nil || len(groups) == 0 {
+		return err
+	}
+	return a.applyGroups(groups)
+}
+
+// prepareSavedSelectionConfig updates config.json before starting sing-box so
+// the selected group and each manual/automatic choice survive a later launch.
+func (a *app) prepareSavedSelectionConfig() error {
+	groups, err := a.readSubscriptions()
+	if err != nil || len(groups) == 0 {
+		return nil
+	}
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil {
+		return err
+	}
+	normalizeAutoSwitchSettings(&settings)
+	changed := false
+	if findGroup(groups, settings.ActiveGroup) < 0 {
+		settings.ActiveGroup = groups[0].ID
+		changed = true
+	}
+	for _, group := range groups {
+		if settings.Manual[group.ID] && hasNodeTag(group.Nodes, settings.Pinned[group.ID]) {
+			continue
+		}
+		if !settings.FailoverOnly || len(group.Nodes) == 0 || hasNodeTag(group.Nodes, settings.Pinned[group.ID]) {
+			continue
+		}
+		settings.Pinned[group.ID] = group.Nodes[0].Tag
+		changed = true
+	}
+	if changed {
+		if err := a.writeAutoSwitchSettings(settings); err != nil {
+			return err
+		}
+	}
+	whitelist, err := a.readWhitelist()
+	if err != nil {
+		return err
+	}
+	config, err := buildSubscriptionConfigWithSettings(groups, whitelist, settings)
+	if err != nil {
+		return err
+	}
+	if err := a.validateConfig(config); err != nil {
+		return err
+	}
+	return os.WriteFile(a.config, config, 0o600)
+}
+
+func (a *app) restoreSavedSelection() {
+	groups, err := a.readSubscriptions()
+	if err != nil || len(groups) == 0 {
+		return
+	}
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil {
+		return
+	}
+	normalizeAutoSwitchSettings(&settings)
+	groupID := settings.ActiveGroup
+	if findGroup(groups, groupID) < 0 {
+		groupID = groups[0].ID
+	}
+	idx := findGroup(groups, groupID)
+	if idx < 0 {
+		return
+	}
+	target := autoTagFor(groupID)
+	if settings.Manual[groupID] && hasNodeTag(groups[idx].Nodes, settings.Pinned[groupID]) {
+		target = settings.Pinned[groupID]
+	} else if settings.FailoverOnly && hasNodeTag(groups[idx].Nodes, settings.Pinned[groupID]) {
+		target = settings.Pinned[groupID]
+	}
+	if err := a.setProxy(selectorTag, groupTagFor(groupID)); err != nil {
+		a.appendLog(fmt.Sprintf("Could not restore saved group %s: %v", groupID, err))
+		return
+	}
+	if err := a.setProxy(groupTagFor(groupID), target); err != nil {
+		a.appendLog(fmt.Sprintf("Could not restore saved node %s: %v", target, err))
+		return
+	}
+	a.appendLog(fmt.Sprintf("Restored saved selection: %s (%s).", groupID, target))
+}
+
+func (a *app) failoverTarget(group subscriptionGroup, settings autoSwitchSettings) (string, error) {
+	if tag := settings.Pinned[group.ID]; hasNodeTag(group.Nodes, tag) {
+		return tag, nil
+	}
+	if picked, err := a.activeProxy(groupTagFor(group.ID)); err == nil {
+		if picked == autoTagFor(group.ID) {
+			picked, _ = a.activeProxy(autoTagFor(group.ID))
+		}
+		if hasNodeTag(group.Nodes, picked) {
+			return picked, nil
+		}
+	}
+	return a.firstWorkingNode(group.Nodes, "")
+}
+
+func (a *app) firstWorkingNode(nodes []vlessNode, skip string) (string, error) {
+	type probeResult struct {
+		tag string
+		err error
+	}
+	results := make(chan probeResult, len(nodes))
+	count := 0
+	for _, node := range nodes {
+		if node.Tag == skip {
+			continue
+		}
+		count++
+		go func(tag string) {
+			delay, err := a.delayTest(tag)
+			a.recordDelay(tag, delay, err)
+			results <- probeResult{tag: tag, err: err}
+		}(node.Tag)
+	}
+	if count == 0 {
+		return "", errors.New("no alternate nodes available")
+	}
+	for range count {
+		result := <-results
+		if result.err == nil {
+			return result.tag, nil
+		}
+	}
+	return "", errors.New("no working nodes found")
+}
+
+// runFailoverMonitor only probes the active automatic node. A failed probe
+// selects one working alternate; ordinary manual latency tests never enter it.
+func (a *app) runFailoverMonitor() {
+	// Run once on startup to migrate an existing urltest selection to a pinned
+	// selector before the first user-triggered latency test.
+	a.checkActiveFailover()
+	ticker := time.NewTicker(failoverCheckInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.checkActiveFailover()
+	}
+}
+
+func (a *app) checkActiveFailover() {
+	if !a.status().Running {
+		return
+	}
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil || !settings.FailoverOnly {
+		return
+	}
+	normalizeAutoSwitchSettings(&settings)
+	groupTag, err := a.activeProxy(selectorTag)
+	if err != nil {
+		return
+	}
+	groupID := groupIDFromTag(groupTag)
+	if groupID == "" || settings.Manual[groupID] {
+		return
+	}
+	groups, err := a.readSubscriptions()
+	if err != nil {
+		return
+	}
+	idx := findGroup(groups, groupID)
+	if idx < 0 {
+		return
+	}
+	current := settings.Pinned[groupID]
+	wasPinned := current != ""
+	if !hasNodeTag(groups[idx].Nodes, current) {
+		current, err = a.failoverTarget(groups[idx], settings)
+		if err != nil {
+			return
+		}
+	}
+	if !wasPinned {
+		// Older settings used urltest directly. Pin its current result now so
+		// later latency tests cannot replace the active node.
+		if err := a.setProxy(groupTagFor(groupID), current); err != nil {
+			a.appendLog(fmt.Sprintf("Could not pin automatic node %s: %v", current, err))
+			return
+		}
+		settings.Pinned[groupID] = current
+		settings.Manual[groupID] = false
+		if err := a.writeAutoSwitchSettings(settings); err != nil {
+			a.appendLog(fmt.Sprintf("Pinned %s but could not save failover settings: %v", current, err))
+			return
+		}
+		a.appendLog(fmt.Sprintf("Failover-only mode pinned automatic node %s.", current))
+	}
+	if delay, probeErr := a.delayTest(current); probeErr == nil {
+		a.recordDelay(current, delay, nil)
+		return
+	} else {
+		a.recordDelay(current, 0, probeErr)
+	}
+
+	a.failoverMu.Lock()
+	defer a.failoverMu.Unlock()
+	// Re-read after waiting for another failure check or a user selection.
+	settings, err = a.readAutoSwitchSettings()
+	if err != nil || !settings.FailoverOnly || settings.Manual[groupID] || settings.Pinned[groupID] != current {
+		return
+	}
+	next, err := a.firstWorkingNode(groups[idx].Nodes, current)
+	if err != nil {
+		a.appendLog(fmt.Sprintf("Failover check %s failed; no alternate node is available.", current))
+		return
+	}
+	if err := a.setProxy(groupTagFor(groupID), next); err != nil {
+		a.appendLog(fmt.Sprintf("Failover switch %s -> %s failed: %v", current, next, err))
+		return
+	}
+	normalizeAutoSwitchSettings(&settings)
+	settings.Pinned[groupID] = next
+	if err := a.writeAutoSwitchSettings(settings); err != nil {
+		a.appendLog(fmt.Sprintf("Failover switched to %s but could not save selection: %v", next, err))
+		return
+	}
+	a.appendLog(fmt.Sprintf("Failover switched %s -> %s after the active node failed.", current, next))
 }
 
 func (a *app) delayTest(tag string) (int, error) {
@@ -1033,8 +1685,11 @@ func (a *app) deleteSubscription(groupID string) error {
 // applyGroups rebuilds the sing-box configuration from all groups, validates it,
 // writes it together with subscriptions.json, and restarts sing-box if it was running.
 func (a *app) applyGroups(groups []subscriptionGroup) error {
+	a.applyMu.Lock()
+	defer a.applyMu.Unlock()
 	whitelist, _ := a.readWhitelist()
-	config, err := buildSubscriptionConfig(groups, whitelist)
+	autoSwitch, _ := a.readAutoSwitchSettings()
+	config, err := buildSubscriptionConfigWithSettings(groups, whitelist, autoSwitch)
 	if err != nil {
 		return err
 	}
@@ -1155,6 +1810,68 @@ func (a *app) applyWhitelist() error {
 	return a.applyGroups(groups)
 }
 
+func (a *app) ensureAutoSwitchSettings() error {
+	if _, err := os.Stat(a.autoSwitch); errors.Is(err, os.ErrNotExist) {
+		return a.writeAutoSwitchSettings(autoSwitchSettings{})
+	}
+	return nil
+}
+
+func (a *app) readAutoSwitchSettings() (autoSwitchSettings, error) {
+	contents, err := os.ReadFile(a.autoSwitch)
+	if err != nil {
+		return autoSwitchSettings{}, err
+	}
+	var settings autoSwitchSettings
+	if err := json.Unmarshal(contents, &settings); err != nil {
+		return autoSwitchSettings{}, err
+	}
+	return settings, nil
+}
+
+func (a *app) writeAutoSwitchSettings(settings autoSwitchSettings) error {
+	contents, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.autoSwitch, contents, 0o600)
+}
+
+func (a *app) ensureFailedNodeCleanupSettings() error {
+	if _, err := os.Stat(a.nodeCleanup); errors.Is(err, os.ErrNotExist) {
+		return a.writeFailedNodeCleanupSettings(failedNodeCleanupSettings{})
+	}
+	return nil
+}
+
+func (a *app) readFailedNodeCleanupSettings() (failedNodeCleanupSettings, error) {
+	contents, err := os.ReadFile(a.nodeCleanup)
+	if err != nil {
+		return failedNodeCleanupSettings{}, err
+	}
+	var settings failedNodeCleanupSettings
+	if err := json.Unmarshal(contents, &settings); err != nil {
+		return failedNodeCleanupSettings{}, err
+	}
+	return settings, nil
+}
+
+func (a *app) writeFailedNodeCleanupSettings(settings failedNodeCleanupSettings) error {
+	contents, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(a.nodeCleanup, contents, 0o600)
+}
+
+func (a *app) applyAutoSwitchSettings() error {
+	groups, err := a.readSubscriptions()
+	if err != nil || len(groups) == 0 {
+		return nil
+	}
+	return a.applyGroups(groups)
+}
+
 func normalizeDomain(input string) string {
 	d := strings.TrimSpace(input)
 	d = strings.ToLower(d)
@@ -1166,6 +1883,14 @@ func normalizeDomain(input string) string {
 	}
 	if i := strings.Index(d, ":"); i >= 0 {
 		d = d[:i]
+	}
+	// sing-box domain_suffix accepts a leading dot. Treat *.vip as .vip so
+	// users can add either familiar wildcard spelling without storing '*'.
+	if strings.HasPrefix(d, "*.") {
+		d = d[1:]
+	}
+	if strings.Contains(d, "*") {
+		return ""
 	}
 	d = strings.TrimPrefix(d, "www.")
 	return strings.TrimSpace(d)
@@ -1209,7 +1934,7 @@ func (a *app) handleAddWhitelist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleDeleteWhitelist(w http.ResponseWriter, r *http.Request) {
-	domain := r.PathValue("domain")
+	domain := normalizeDomain(r.PathValue("domain"))
 	domains, _ := a.readWhitelist()
 	filtered := make([]string, 0, len(domains))
 	for _, d := range domains {
@@ -1227,6 +1952,79 @@ func (a *app) handleDeleteWhitelist(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"domains": filtered})
 }
+
+func (a *app) handleUpdateWhitelist(w http.ResponseWriter, r *http.Request) {
+	oldDomain := normalizeDomain(r.PathValue("domain"))
+	var req struct {
+		Domain string `json:"domain"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	newDomain := normalizeDomain(req.Domain)
+	if oldDomain == "" || newDomain == "" {
+		writeError(w, http.StatusBadRequest, errors.New("domain is required"))
+		return
+	}
+	domains, err := a.readWhitelist()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	found := false
+	updated := make([]string, 0, len(domains))
+	seen := make(map[string]bool)
+	for _, domain := range domains {
+		if domain == oldDomain {
+			domain = newDomain
+			found = true
+		}
+		if !seen[domain] {
+			updated = append(updated, domain)
+			seen[domain] = true
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, errors.New("whitelist domain not found"))
+		return
+	}
+	if err := a.writeWhitelist(updated); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := a.applyWhitelist(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"domains": updated})
+}
+
+func (a *app) handleRouteRules(w http.ResponseWriter, _ *http.Request) {
+	domains, err := a.readWhitelist()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, routeRulesResponse{Rules: a.routeRules(domains)})
+}
+
+func (a *app) routeRules(whitelist []string) []routeRule {
+	rules := []routeRule{
+		{ID: "private-ip", Name: "私有网络", Kind: "IP", Value: "局域网 / 私有 IP", Outbound: "直连", Source: "内置", Editable: false},
+		{ID: "geosite-private", Name: "私有域名", Kind: "规则集", Value: "geosite-private", Outbound: "直连", Source: "内置", Editable: false},
+		{ID: "geosite-cn", Name: "中国大陆域名", Kind: "规则集", Value: "geosite-cn", Outbound: "直连", Source: "内置", Editable: false},
+		{ID: "geoip-cn", Name: "中国大陆 IP", Kind: "规则集", Value: "geoip-cn", Outbound: "直连", Source: "内置", Editable: false},
+	}
+	for _, domain := range whitelist {
+		rules = append(rules, routeRule{
+			ID: "whitelist:" + domain, Name: "自定义白名单", Kind: "域名及子域名", Value: domain, Outbound: "直连", Source: "自定义", Editable: true,
+		})
+	}
+	rules = append(rules, routeRule{ID: "final", Name: "其余流量", Kind: "默认", Value: "未匹配任何直连规则", Outbound: "代理", Source: "内置", Editable: false})
+	return rules
+}
+
 func downloadNodes(subscriptionURL string) ([]vlessNode, error) {
 	request, err := http.NewRequest(http.MethodGet, subscriptionURL, nil)
 	if err != nil {
@@ -1308,6 +2106,7 @@ func parseSingboxConfigNodes(content string) ([]vlessNode, error) {
 		if name == "" {
 			name = tag
 		}
+		sanitizeVLESSFlow(outbound)
 		outbound["tag"] = tag
 		nodes = append(nodes, vlessNode{Tag: tag, Name: name, Outbound: outbound})
 	}
@@ -1352,7 +2151,7 @@ func parseVLESS(raw string, number int) (vlessNode, error) {
 		"server_port": port,
 		"uuid":        parsedURL.User.Username(),
 	}
-	if flow := query.Get("flow"); flow != "" {
+	if flow := query.Get("flow"); flow == "xtls-rprx-vision" {
 		outbound["flow"] = flow
 	}
 
@@ -1404,10 +2203,25 @@ func parseVLESS(raw string, number int) (vlessNode, error) {
 	return vlessNode{Tag: tag, Name: name, Outbound: outbound}, nil
 }
 
+// sing-box only supports the standard Vision flow for VLESS. Some providers
+// publish Xray-specific suffixes such as "xtls-rprx-vision-udp44"; dropping
+// those suffix variants keeps the node importable instead of rejecting the
+// entire subscription configuration.
+func sanitizeVLESSFlow(outbound map[string]any) {
+	flow, _ := outbound["flow"].(string)
+	if flow != "" && flow != "xtls-rprx-vision" {
+		delete(outbound, "flow")
+	}
+}
+
 // buildSubscriptionConfig generates a sing-box configuration with one selector
 // per subscription group. The top-level "proxy" selector switches between groups;
 // each group selector offers its own urltest (auto) plus individual nodes.
 func buildSubscriptionConfig(groups []subscriptionGroup, whitelist []string) ([]byte, error) {
+	return buildSubscriptionConfigWithSettings(groups, whitelist, autoSwitchSettings{})
+}
+
+func buildSubscriptionConfigWithSettings(groups []subscriptionGroup, whitelist []string, autoSwitch autoSwitchSettings) ([]byte, error) {
 	outbounds := make([]any, 0, 8)
 	groupSelectors := make([]string, 0, len(groups))
 	for _, group := range groups {
@@ -1420,19 +2234,36 @@ func buildSubscriptionConfig(groups []subscriptionGroup, whitelist []string) ([]
 		}
 		autoTag := autoTagFor(group.ID)
 		groupTag := groupTagFor(group.ID)
-		outbounds = append(outbounds, map[string]any{
+		urltest := map[string]any{
 			"type":      "urltest",
 			"tag":       autoTag,
 			"outbounds": nodeTags,
 			"url":       latencyTestURL,
 			"interval":  "5m",
 			"tolerance": 50,
-		})
+		}
+		if autoSwitch.FailoverOnly {
+			// A very high tolerance prevents switching to a merely faster member;
+			// an unavailable member still causes urltest to select a working one.
+			urltest["tolerance"] = failoverTolerance
+		}
+		outbounds = append(outbounds, urltest)
+		defaultOutbound := autoTag
+		if autoSwitch.FailoverOnly {
+			// Point the selector at a concrete pinned node. urltest remains in the
+			// config for latency-optimized mode, but cannot alter active traffic in
+			// failover-only mode.
+			if pinned := autoSwitch.Pinned[group.ID]; hasNodeTag(group.Nodes, pinned) {
+				defaultOutbound = pinned
+			} else {
+				defaultOutbound = group.Nodes[0].Tag
+			}
+		}
 		outbounds = append(outbounds, map[string]any{
 			"type":      "selector",
 			"tag":       groupTag,
 			"outbounds": append([]string{autoTag}, nodeTags...),
-			"default":   autoTag,
+			"default":   defaultOutbound,
 		})
 		groupSelectors = append(groupSelectors, groupTag)
 		for _, node := range group.Nodes {

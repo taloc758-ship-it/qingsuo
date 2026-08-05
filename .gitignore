@@ -34,3 +34,7 @@ ClientUI/nul
 Lib/
 *.exe
 *.exe~
+# Build and portable package output.
+.package-staging/
+release*/
+backend/web/dist/

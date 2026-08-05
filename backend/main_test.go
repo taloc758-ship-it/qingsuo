@@ -15,12 +15,16 @@ func newTestApp(t *testing.T) *app {
 	t.Helper()
 	dir := t.TempDir()
 	a := &app{
-		dataDir: dir,
-		config:  filepath.Join(dir, "config.json"),
-		binary:  filepath.Join(dir, "missing-sing-box.exe"),
+		dataDir:       dir,
+		config:        filepath.Join(dir, "config.json"),
+		binary:        filepath.Join(dir, "missing-sing-box.exe"),
+		subscriptions: filepath.Join(dir, "subscriptions.json"),
 	}
 	if err := a.ensureConfig(); err != nil {
 		t.Fatalf("ensureConfig: %v", err)
+	}
+	if err := a.ensureSubscriptions(); err != nil {
+		t.Fatalf("ensureSubscriptions: %v", err)
 	}
 	return a
 }
@@ -85,14 +89,88 @@ func TestParseVLESSRealityAndWebSocket(t *testing.T) {
 }
 
 func TestBuildSubscriptionConfigHasUrltestMembers(t *testing.T) {
-	config, err := buildSubscriptionConfig([]vlessNode{
-		{Tag: "node-01", Name: "Test node", Outbound: map[string]any{"type": "vless", "tag": "node-01"}},
-	})
+	config, err := buildSubscriptionConfig([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{
+			{Tag: "g1-01", Name: "Test node", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}},
+		}},
+	}, nil)
 	if err != nil {
 		t.Fatalf("build config: %v", err)
 	}
-	if !strings.Contains(string(config), `"proxy-auto"`) || !strings.Contains(string(config), `"node-01"`) || !strings.Contains(string(config), `"clash_api"`) || !strings.Contains(string(config), `"http-in"`) {
+	if !strings.Contains(string(config), `"grp-g1"`) || !strings.Contains(string(config), `"auto-g1"`) || !strings.Contains(string(config), `"g1-01"`) || !strings.Contains(string(config), `"clash_api"`) || !strings.Contains(string(config), `"http-in"`) {
 		t.Fatalf("generated config omitted urltest members: %s", config)
+	}
+}
+
+func TestBuildSubscriptionConfigHasWhitelistRouting(t *testing.T) {
+	config, err := buildSubscriptionConfig([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{
+			{Tag: "g1-01", Name: "Test node", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}},
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	body := string(config)
+	for _, expected := range []string{`"rule_set"`, `"geosite-cn"`, `"geoip-cn"`, `"ip_is_private"`, `"srss/geosite-cn.srs"`, `"outbound": "direct"`, `"final": "proxy"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("generated config missing whitelist routing token %q: %s", expected, config)
+		}
+	}
+}
+
+func TestBuildSubscriptionConfigCustomWhitelist(t *testing.T) {
+	config, err := buildSubscriptionConfig([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{
+			{Tag: "g1-01", Name: "Test node", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}},
+		}},
+	}, []string{"example.com", "foo.org"})
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	body := string(config)
+	for _, expected := range []string{`"domain_suffix"`, `"example.com"`, `"foo.org"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("custom whitelist missing %q: %s", expected, config)
+		}
+	}
+}
+func TestBuildSubscriptionConfigMultipleGroups(t *testing.T) {
+	config, err := buildSubscriptionConfig([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Name: "a", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}},
+		{ID: "g2", Nodes: []vlessNode{{Tag: "g2-01", Name: "b", Outbound: map[string]any{"type": "vless", "tag": "g2-01"}}}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	body := string(config)
+	for _, expected := range []string{`"grp-g1"`, `"grp-g2"`, `"g1-01"`, `"g2-01"`, `"final": "proxy"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("multi-group config missing %q: %s", expected, config)
+		}
+	}
+}
+
+func TestNextGroupID(t *testing.T) {
+	if id := nextGroupID(nil); id != "g1" {
+		t.Fatalf("empty -> g1, got %s", id)
+	}
+	if id := nextGroupID([]subscriptionGroup{{ID: "g1"}, {ID: "g2"}}); id != "g3" {
+		t.Fatalf("g1,g2 -> g3, got %s", id)
+	}
+}
+
+func TestRelabelNodes(t *testing.T) {
+	nodes := []vlessNode{
+		{Tag: "node-01", Outbound: map[string]any{"type": "vless", "tag": "node-01"}},
+		{Tag: "node-02", Outbound: map[string]any{"type": "vless", "tag": "node-02"}},
+	}
+	relabelNodes(nodes, "g3")
+	if nodes[0].Tag != "g3-01" || nodes[1].Tag != "g3-02" {
+		t.Fatalf("tags not relabeled: %+v", nodes)
+	}
+	if nodes[0].Outbound["tag"] != "g3-01" {
+		t.Fatalf("outbound tag not relabeled: %v", nodes[0].Outbound)
 	}
 }
 

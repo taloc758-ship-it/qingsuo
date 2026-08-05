@@ -24,84 +24,92 @@
   },
   "outbounds": [
     {
+      "default": "grp-g1",
+      "outbounds": [
+        "grp-g1"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
       "interval": "5m",
       "outbounds": [
-        "node-01",
-        "node-02",
-        "node-03",
-        "node-04",
-        "node-05",
-        "node-06",
-        "node-07",
-        "node-08",
-        "node-09",
-        "node-10",
-        "node-11",
-        "node-12",
-        "node-13",
-        "node-14",
-        "node-15",
-        "node-16",
-        "node-17",
-        "node-18",
-        "node-19",
-        "node-20",
-        "node-21",
-        "node-22",
-        "node-23",
-        "node-24",
-        "node-25",
-        "node-26",
-        "node-27",
-        "node-28",
-        "node-29",
-        "node-30",
-        "node-31",
-        "node-32"
+        "g1-01",
+        "g1-02",
+        "g1-03",
+        "g1-04",
+        "g1-05",
+        "g1-06",
+        "g1-07",
+        "g1-08",
+        "g1-09",
+        "g1-10",
+        "g1-11",
+        "g1-12",
+        "g1-13",
+        "g1-14",
+        "g1-15",
+        "g1-16",
+        "g1-17",
+        "g1-18",
+        "g1-19",
+        "g1-20",
+        "g1-21",
+        "g1-22",
+        "g1-23",
+        "g1-24",
+        "g1-25",
+        "g1-26",
+        "g1-27",
+        "g1-28",
+        "g1-29",
+        "g1-30",
+        "g1-31",
+        "g1-32"
       ],
-      "tag": "proxy-auto",
+      "tag": "auto-g1",
       "tolerance": 50,
       "type": "urltest",
       "url": "https://www.gstatic.com/generate_204"
     },
     {
-      "default": "proxy-auto",
+      "default": "auto-g1",
       "outbounds": [
-        "proxy-auto",
-        "node-01",
-        "node-02",
-        "node-03",
-        "node-04",
-        "node-05",
-        "node-06",
-        "node-07",
-        "node-08",
-        "node-09",
-        "node-10",
-        "node-11",
-        "node-12",
-        "node-13",
-        "node-14",
-        "node-15",
-        "node-16",
-        "node-17",
-        "node-18",
-        "node-19",
-        "node-20",
-        "node-21",
-        "node-22",
-        "node-23",
-        "node-24",
-        "node-25",
-        "node-26",
-        "node-27",
-        "node-28",
-        "node-29",
-        "node-30",
-        "node-31",
-        "node-32"
+        "auto-g1",
+        "g1-01",
+        "g1-02",
+        "g1-03",
+        "g1-04",
+        "g1-05",
+        "g1-06",
+        "g1-07",
+        "g1-08",
+        "g1-09",
+        "g1-10",
+        "g1-11",
+        "g1-12",
+        "g1-13",
+        "g1-14",
+        "g1-15",
+        "g1-16",
+        "g1-17",
+        "g1-18",
+        "g1-19",
+        "g1-20",
+        "g1-21",
+        "g1-22",
+        "g1-23",
+        "g1-24",
+        "g1-25",
+        "g1-26",
+        "g1-27",
+        "g1-28",
+        "g1-29",
+        "g1-30",
+        "g1-31",
+        "g1-32"
       ],
-      "tag": "proxy",
+      "tag": "grp-g1",
       "type": "selector"
     },
     {
@@ -109,7 +117,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-01",
+      "tag": "g1-01",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -138,7 +146,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-02",
+      "tag": "g1-02",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -167,7 +175,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-03",
+      "tag": "g1-03",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -196,7 +204,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-04",
+      "tag": "g1-04",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -225,7 +233,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-05",
+      "tag": "g1-05",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -254,7 +262,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-06",
+      "tag": "g1-06",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -283,7 +291,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-07",
+      "tag": "g1-07",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -312,7 +320,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-08",
+      "tag": "g1-08",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -341,7 +349,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-09",
+      "tag": "g1-09",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -370,7 +378,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-10",
+      "tag": "g1-10",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -399,7 +407,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-11",
+      "tag": "g1-11",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -428,7 +436,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-12",
+      "tag": "g1-12",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -457,7 +465,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-13",
+      "tag": "g1-13",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -486,7 +494,7 @@
       "packet_encoding": "xudp",
       "server": "xn--download-ne4yj89e.com",
       "server_port": 443,
-      "tag": "node-14",
+      "tag": "g1-14",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -515,7 +523,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-15",
+      "tag": "g1-15",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -538,7 +546,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-16",
+      "tag": "g1-16",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -561,7 +569,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-17",
+      "tag": "g1-17",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -584,7 +592,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-18",
+      "tag": "g1-18",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -607,7 +615,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-19",
+      "tag": "g1-19",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -630,7 +638,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-20",
+      "tag": "g1-20",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -653,7 +661,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-21",
+      "tag": "g1-21",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -676,7 +684,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-22",
+      "tag": "g1-22",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -699,7 +707,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-23",
+      "tag": "g1-23",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -722,7 +730,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-24",
+      "tag": "g1-24",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -745,7 +753,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-25",
+      "tag": "g1-25",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -768,7 +776,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-26",
+      "tag": "g1-26",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -791,7 +799,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-27",
+      "tag": "g1-27",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -814,7 +822,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-28",
+      "tag": "g1-28",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -837,7 +845,7 @@
       "packet_encoding": "xudp",
       "server": "xmixx.cyberguard.games",
       "server_port": 37000,
-      "tag": "node-29",
+      "tag": "g1-29",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -860,7 +868,7 @@
       "packet_encoding": "xudp",
       "server": "ch-jp2.599789.xyz",
       "server_port": 43229,
-      "tag": "node-30",
+      "tag": "g1-30",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -889,7 +897,7 @@
       "packet_encoding": "xudp",
       "server": "ch-jp2.599789.xyz",
       "server_port": 26273,
-      "tag": "node-31",
+      "tag": "g1-31",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -918,7 +926,7 @@
       "packet_encoding": "xudp",
       "server": "ch-jp2.599789.xyz",
       "server_port": 46346,
-      "tag": "node-32",
+      "tag": "g1-32",
       "tls": {
         "enabled": true,
         "insecure": false,
@@ -948,6 +956,50 @@
     }
   ],
   "route": {
-    "final": "proxy"
+    "final": "proxy",
+    "rule_set": [
+      {
+        "format": "binary",
+        "path": "srss/geosite-cn.srs",
+        "tag": "geosite-cn",
+        "type": "local"
+      },
+      {
+        "format": "binary",
+        "path": "srss/geoip-cn.srs",
+        "tag": "geoip-cn",
+        "type": "local"
+      },
+      {
+        "format": "binary",
+        "path": "srss/geosite-private.srs",
+        "tag": "geosite-private",
+        "type": "local"
+      }
+    ],
+    "rules": [
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "outbound": "direct",
+        "rule_set": [
+          "geosite-private"
+        ]
+      },
+      {
+        "outbound": "direct",
+        "rule_set": [
+          "geosite-cn"
+        ]
+      },
+      {
+        "outbound": "direct",
+        "rule_set": [
+          "geoip-cn"
+        ]
+      }
+    ]
   }
 }

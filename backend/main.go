@@ -22,11 +22,13 @@ import (
 )
 
 const (
-	defaultListenAddress = "127.0.0.1:8787"
-	maxLogBytes          = 128 * 1024
-	clashAPIURL          = "http://127.0.0.1:9090"
-	selectorTag          = "proxy"
-	latencyTestURL       = "https://www.gstatic.com/generate_204"
+	defaultListenAddress  = "127.0.0.1:8787"
+	maxLogBytes           = 128 * 1024
+	clashAPIURL           = "http://127.0.0.1:9090"
+	selectorTag           = "proxy"
+	googleLatencyTestURL  = "https://www.gstatic.com/generate_204"
+	geminiLatencyTestURL  = "https://gemini.google.com/"
+	chatGPTLatencyTestURL = "https://chatgpt.com/"
 	// sing-box defines urltest tolerance as uint16. Its largest valid value is
 	// far above ordinary latency, so it prevents latency-only switching.
 	failoverTolerance = 65535
@@ -59,7 +61,7 @@ type app struct {
 	started       time.Time
 	lastExit      string
 	logs          string
-	delays        map[string]int
+	delays        map[string]serviceDelays
 	failoverMu    sync.Mutex
 	cleanupMu     sync.Mutex
 	applyMu       sync.Mutex
@@ -159,13 +161,94 @@ type groupStatus struct {
 }
 
 type nodeStatus struct {
-	Tag            string `json:"tag"`
-	Name           string `json:"name"`
-	Country        string `json:"country"`
-	GeminiSupport  string `json:"geminiSupport"`
-	ChatGPTSupport string `json:"chatgptSupport"`
+	Tag     string `json:"tag"`
+	Name    string `json:"name"`
+	Country string `json:"country"`
+	// DelayMS is the combined score retained for older frontends. It is the
+	// slowest successful service check, so a slow AI service is not hidden by
+	// a fast Google probe.
 	DelayMS        int    `json:"delayMs"`
+	GoogleDelayMS  int    `json:"googleDelayMs"`
+	GeminiDelayMS  int    `json:"geminiDelayMs"`
+	ChatGPTDelayMS int    `json:"chatgptDelayMs"`
 	Error          string `json:"error,omitempty"`
+}
+
+// serviceDelays stores the real destination checks for a node. A positive
+// value is milliseconds, zero is not tested yet, and -1 is a failed check.
+type serviceDelays struct {
+	Google  int
+	Gemini  int
+	ChatGPT int
+}
+
+func (d serviceDelays) merge(next serviceDelays, service delayTestService) serviceDelays {
+	if service == delayTestAll {
+		return next
+	}
+	switch service {
+	case delayTestGoogle:
+		d.Google = next.Google
+	case delayTestGemini:
+		d.Gemini = next.Gemini
+	case delayTestChatGPT:
+		d.ChatGPT = next.ChatGPT
+	}
+	return d
+}
+
+type delayTestService string
+
+type latencyServiceProbe struct {
+	name string
+	url  string
+}
+
+const (
+	delayTestAll     delayTestService = "all"
+	delayTestGoogle  delayTestService = "google"
+	delayTestGemini  delayTestService = "gemini"
+	delayTestChatGPT delayTestService = "chatgpt"
+)
+
+func (d serviceDelays) combined() int {
+	if d.Google == 0 && d.Gemini == 0 && d.ChatGPT == 0 {
+		return 0
+	}
+	if d.Google <= 0 || d.Gemini <= 0 || d.ChatGPT <= 0 {
+		return -1
+	}
+	return max(d.Google, d.Gemini, d.ChatGPT)
+}
+
+func (d serviceDelays) errorMessage() string {
+	failed := make([]string, 0, 3)
+	if d.Google < 0 {
+		failed = append(failed, "Google")
+	}
+	if d.Gemini < 0 {
+		failed = append(failed, "Gemini")
+	}
+	if d.ChatGPT < 0 {
+		failed = append(failed, "ChatGPT")
+	}
+	if len(failed) == 0 {
+		return ""
+	}
+	return strings.Join(failed, "、") + " 无法连接"
+}
+
+func parseDelayTestService(r *http.Request) (delayTestService, error) {
+	service := delayTestService(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("service"))))
+	if service == "" {
+		return delayTestAll, nil
+	}
+	switch service {
+	case delayTestAll, delayTestGoogle, delayTestGemini, delayTestChatGPT:
+		return service, nil
+	default:
+		return "", errors.New("test service must be all, google, gemini, or chatgpt")
+	}
 }
 
 type routeRule struct {
@@ -183,42 +266,37 @@ type routeRulesResponse struct {
 }
 
 type nodeAvailability struct {
-	Country        string
-	GeminiSupport  string
-	ChatGPTSupport string
+	Country string
 }
 
 type countryAvailabilityRule struct {
-	Country        string
-	Markers        []string
-	GeminiSupport  string
-	ChatGPTSupport string
+	Country string
+	Markers []string
 }
 
-const (
-	availabilitySupported   = "supported"
-	availabilityUnsupported = "unsupported"
-	availabilityUnknown     = "unknown"
-)
-
-// These are static region rules, not an IP geolocation or an end-to-end service test.
+// This only recognizes the region written in a subscription's display name.
+// Service availability is determined by actual latency tests instead.
 var countryAvailabilityRules = []countryAvailabilityRule{
-	{Country: "香港", Markers: []string{"🇭🇰", "香港", "hong kong"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilityUnsupported},
-	{Country: "美国", Markers: []string{"🇺🇸", "美国", "united states", "usa"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "澳大利亚", Markers: []string{"🇦🇺", "澳大利亚", "australia"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "韩国", Markers: []string{"🇰🇷", "韩国", "south korea", "korea"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "德国", Markers: []string{"🇩🇪", "德国", "germany"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "阿联酋", Markers: []string{"🇦🇪", "阿联酋", "迪拜", "united arab emirates", "uae", "dubai"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "英国", Markers: []string{"🇬🇧", "英国", "united kingdom", "uk", "great britain"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "印度", Markers: []string{"🇮🇳", "印度", "india"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "新加坡", Markers: []string{"🇸🇬", "新加坡", "singapore"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
-	{Country: "日本", Markers: []string{"🇯🇵", "日本", "japan"}, GeminiSupport: availabilitySupported, ChatGPTSupport: availabilitySupported},
+	{Country: "香港", Markers: []string{"🇭🇰", "香港", "hong kong"}},
+	{Country: "美国", Markers: []string{"🇺🇸", "美国", "united states", "usa"}},
+	{Country: "澳大利亚", Markers: []string{"🇦🇺", "澳大利亚", "australia"}},
+	{Country: "韩国", Markers: []string{"🇰🇷", "韩国", "south korea", "korea"}},
+	{Country: "德国", Markers: []string{"🇩🇪", "德国", "germany"}},
+	{Country: "阿联酋", Markers: []string{"🇦🇪", "阿联酋", "迪拜", "united arab emirates", "uae", "dubai"}},
+	{Country: "英国", Markers: []string{"🇬🇧", "英国", "united kingdom", "uk", "great britain"}},
+	{Country: "印度", Markers: []string{"🇮🇳", "印度", "india"}},
+	{Country: "新加坡", Markers: []string{"🇸🇬", "新加坡", "singapore"}},
+	{Country: "日本", Markers: []string{"🇯🇵", "日本", "japan"}},
 }
 
 type selectionRequest struct {
 	GroupID string `json:"groupId"`
 	Mode    string `json:"mode"`
 	Tag     string `json:"tag"`
+}
+
+type delayTestRequest struct {
+	Service string `json:"service"`
 }
 
 type clashProxiesResponse struct {
@@ -253,7 +331,7 @@ func main() {
 		whitelist:     filepath.Join(absoluteDataDir, "whitelist.json"),
 		autoSwitch:    filepath.Join(absoluteDataDir, "auto-switch.json"),
 		nodeCleanup:   filepath.Join(absoluteDataDir, "failed-node-cleanup.json"),
-		delays:        make(map[string]int),
+		delays:        make(map[string]serviceDelays),
 	}
 	if err := application.ensureConfig(); err != nil {
 		log.Fatalf("prepare configuration: %v", err)
@@ -921,6 +999,11 @@ func (a *app) handleTestGroupNodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("start sing-box before testing nodes"))
 		return
 	}
+	service, err := parseDelayTestService(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
 	idx := findGroup(groups, groupID)
 	if idx < 0 {
@@ -933,7 +1016,10 @@ func (a *app) handleTestGroupNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	group := groups[idx]
-	go a.testGroupNodes(group.ID, group.Nodes, cleanup.RemoveFailed)
+	// Removing a node after a partial probe would be misleading. Cleanup is
+	// intentionally reserved for an all-services test.
+	removeFailed := cleanup.RemoveFailed && service == delayTestAll
+	go a.testGroupNodes(group.ID, group.Nodes, service, removeFailed)
 	writeJSON(w, http.StatusAccepted, map[string]int{"testing": len(group.Nodes)})
 }
 
@@ -961,12 +1047,17 @@ func (a *app) handleTestNode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, errors.New("start sing-box before testing nodes"))
 		return
 	}
+	service, err := parseDelayTestService(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	cleanup, err := a.readFailedNodeCleanupSettings()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	a.testNodeAsync(groupID, tag, cleanup.RemoveFailed)
+	a.testNodeAsync(groupID, tag, service, cleanup.RemoveFailed && service == delayTestAll)
 	writeJSON(w, http.StatusAccepted, map[string]string{"testing": tag})
 }
 
@@ -1090,13 +1181,16 @@ func (a *app) nodesStatus() (nodeStatusResponse, error) {
 		gs.Active = active[group.ID]
 		for _, node := range group.Nodes {
 			availability := classifyNodeAvailability(node.Name)
+			delays := a.delays[node.Tag]
 			gs.Nodes = append(gs.Nodes, nodeStatus{
 				Tag:            node.Tag,
 				Name:           node.Name,
 				Country:        availability.Country,
-				GeminiSupport:  availability.GeminiSupport,
-				ChatGPTSupport: availability.ChatGPTSupport,
-				DelayMS:        a.delays[node.Tag],
+				DelayMS:        delays.combined(),
+				GoogleDelayMS:  delays.Google,
+				GeminiDelayMS:  delays.Gemini,
+				ChatGPTDelayMS: delays.ChatGPT,
+				Error:          delays.errorMessage(),
 			})
 		}
 		response.Groups = append(response.Groups, gs)
@@ -1110,26 +1204,22 @@ func classifyNodeAvailability(name string) nodeAvailability {
 		for _, marker := range rule.Markers {
 			if strings.Contains(normalized, strings.ToLower(marker)) {
 				return nodeAvailability{
-					Country:        rule.Country,
-					GeminiSupport:  rule.GeminiSupport,
-					ChatGPTSupport: rule.ChatGPTSupport,
+					Country: rule.Country,
 				}
 			}
 		}
 	}
 	return nodeAvailability{
-		Country:        "未识别",
-		GeminiSupport:  availabilityUnknown,
-		ChatGPTSupport: availabilityUnknown,
+		Country: "未识别",
 	}
 }
 
-func (a *app) testNodeAsync(groupID, tag string, removeFailed bool) {
+func (a *app) testNodeAsync(groupID, tag string, service delayTestService, removeFailed bool) {
 	go func() {
-		result, err := a.delayTest(tag)
-		a.recordDelay(tag, result, err)
+		result, err := a.serviceDelayTest(tag, service)
+		a.recordDelay(tag, result, service)
 		if err != nil {
-			a.appendLog(fmt.Sprintf("Delay test %s failed: %v", tag, err))
+			a.appendLog(fmt.Sprintf("Service latency test %s failed: %v", tag, err))
 			if removeFailed {
 				a.removeFailedNodes(groupID, map[string]bool{tag: true})
 			}
@@ -1139,7 +1229,7 @@ func (a *app) testNodeAsync(groupID, tag string, removeFailed bool) {
 
 // testGroupNodes limits concurrent probes, then applies all deletions in one
 // configuration rebuild so the proxy only restarts once per full-group test.
-func (a *app) testGroupNodes(groupID string, nodes []vlessNode, removeFailed bool) {
+func (a *app) testGroupNodes(groupID string, nodes []vlessNode, service delayTestService, removeFailed bool) {
 	failed := make(map[string]bool)
 	var failedMu sync.Mutex
 	var workers sync.WaitGroup
@@ -1153,10 +1243,10 @@ func (a *app) testGroupNodes(groupID string, nodes []vlessNode, removeFailed boo
 		go func() {
 			defer workers.Done()
 			for node := range jobs {
-				delay, err := a.delayTest(node.Tag)
-				a.recordDelay(node.Tag, delay, err)
+				delays, err := a.serviceDelayTest(node.Tag, service)
+				a.recordDelay(node.Tag, delays, service)
 				if err != nil {
-					a.appendLog(fmt.Sprintf("Delay test %s failed: %v", node.Tag, err))
+					a.appendLog(fmt.Sprintf("Service latency test %s failed: %v", node.Tag, err))
 					if removeFailed {
 						failedMu.Lock()
 						failed[node.Tag] = true
@@ -1232,14 +1322,10 @@ func (a *app) removeFailedNodes(groupID string, failed map[string]bool) {
 	a.appendLog(fmt.Sprintf("Removed %d failed nodes from %s after delay tests.", removed, groupID))
 }
 
-func (a *app) recordDelay(tag string, delay int, err error) {
+func (a *app) recordDelay(tag string, delays serviceDelays, service delayTestService) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err == nil {
-		a.delays[tag] = delay
-		return
-	}
-	a.delays[tag] = -1
+	a.delays[tag] = a.delays[tag].merge(delays, service)
 }
 
 func normalizeAutoSwitchSettings(settings *autoSwitchSettings) {
@@ -1426,8 +1512,8 @@ func (a *app) firstWorkingNode(nodes []vlessNode, skip string) (string, error) {
 		}
 		count++
 		go func(tag string) {
-			delay, err := a.delayTest(tag)
-			a.recordDelay(tag, delay, err)
+			delays, err := a.serviceDelayTest(tag, delayTestAll)
+			a.recordDelay(tag, delays, delayTestAll)
 			results <- probeResult{tag: tag, err: err}
 		}(node.Tag)
 	}
@@ -1504,11 +1590,11 @@ func (a *app) checkActiveFailover() {
 		}
 		a.appendLog(fmt.Sprintf("Failover-only mode pinned automatic node %s.", current))
 	}
-	if delay, probeErr := a.delayTest(current); probeErr == nil {
-		a.recordDelay(current, delay, nil)
+	if delays, probeErr := a.serviceDelayTest(current, delayTestAll); probeErr == nil {
+		a.recordDelay(current, delays, delayTestAll)
 		return
 	} else {
-		a.recordDelay(current, 0, probeErr)
+		a.recordDelay(current, delays, delayTestAll)
 	}
 
 	a.failoverMu.Lock()
@@ -1536,8 +1622,67 @@ func (a *app) checkActiveFailover() {
 	a.appendLog(fmt.Sprintf("Failover switched %s -> %s after the active node failed.", current, next))
 }
 
-func (a *app) delayTest(tag string) (int, error) {
-	endpoint := fmt.Sprintf("%s/proxies/%s/delay?timeout=10000&url=%s", clashAPIURL, url.PathEscape(tag), url.QueryEscape(latencyTestURL))
+func (a *app) serviceDelayTest(tag string, service delayTestService) (serviceDelays, error) {
+	type serviceProbeResult struct {
+		name  string
+		delay int
+		err   error
+	}
+	probes := []latencyServiceProbe{
+		{name: "Google", url: googleLatencyTestURL},
+		{name: "Gemini", url: geminiLatencyTestURL},
+		{name: "ChatGPT", url: chatGPTLatencyTestURL},
+	}
+	var delays serviceDelays
+	var failures []string
+	if service != delayTestAll {
+		probes = filterServiceProbes(probes, service)
+	}
+	results := make(chan serviceProbeResult, len(probes))
+	for _, probe := range probes {
+		go func(probe latencyServiceProbe) {
+			delay, err := a.delayTestURL(tag, probe.url)
+			results <- serviceProbeResult{name: probe.name, delay: delay, err: err}
+		}(probe)
+	}
+	for range probes {
+		result := <-results
+		delay, err := result.delay, result.err
+		if err != nil {
+			delay = -1
+			failures = append(failures, fmt.Sprintf("%s: %v", result.name, err))
+		}
+		switch result.name {
+		case "Google":
+			delays.Google = delay
+		case "Gemini":
+			delays.Gemini = delay
+		case "ChatGPT":
+			delays.ChatGPT = delay
+		}
+	}
+	if len(failures) > 0 {
+		return delays, errors.New(strings.Join(failures, "; "))
+	}
+	return delays, nil
+}
+
+func filterServiceProbes(probes []latencyServiceProbe, service delayTestService) []latencyServiceProbe {
+	wanted := map[delayTestService]string{
+		delayTestGoogle:  "Google",
+		delayTestGemini:  "Gemini",
+		delayTestChatGPT: "ChatGPT",
+	}[service]
+	for _, probe := range probes {
+		if probe.name == wanted {
+			return []latencyServiceProbe{probe}
+		}
+	}
+	return nil
+}
+
+func (a *app) delayTestURL(tag, testURL string) (int, error) {
+	endpoint := fmt.Sprintf("%s/proxies/%s/delay?timeout=10000&url=%s", clashAPIURL, url.PathEscape(tag), url.QueryEscape(testURL))
 	response, err := (&http.Client{Timeout: 12 * time.Second}).Get(endpoint)
 	if err != nil {
 		return 0, err
@@ -2221,7 +2366,9 @@ func buildSubscriptionConfigWithSettings(groups []subscriptionGroup, whitelist [
 			"type":      "urltest",
 			"tag":       autoTag,
 			"outbounds": nodeTags,
-			"url":       latencyTestURL,
+			// sing-box urltest supports one URL only. The application-level
+			// service checks below cover Google, Gemini, and ChatGPT together.
+			"url":       googleLatencyTestURL,
 			"interval":  "5m",
 			"tolerance": 50,
 		}

@@ -9,15 +9,14 @@ type Status = {
   proxyEndpoint: string
 }
 
-type Availability = 'supported' | 'unsupported' | 'unknown'
-
 type NodeStatus = {
   tag: string
   name: string
   country: string
-  geminiSupport: Availability
-  chatgptSupport: Availability
   delayMs: number
+  googleDelayMs: number
+  geminiDelayMs: number
+  chatgptDelayMs: number
   error?: string
 }
 
@@ -79,8 +78,8 @@ type FailedNodeCleanupSettings = {
   removeFailed: boolean
 }
 
-type NodeFilter = 'all' | 'gemini' | 'chatgpt' | 'both' | 'not-supported'
-type NodeSort = 'latency-asc' | 'latency-desc' | 'name'
+type NodeSort = 'combined-asc' | 'combined-desc' | 'google-asc' | 'gemini-asc' | 'chatgpt-asc' | 'name'
+type TestService = 'all' | 'google' | 'gemini' | 'chatgpt'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -131,8 +130,8 @@ export default function App() {
   const [logs, setLogs] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const [nodeFilter, setNodeFilter] = useState<NodeFilter>('both')
-  const [nodeSort, setNodeSort] = useState<NodeSort>('latency-asc')
+  const [testService, setTestService] = useState<TestService>('all')
+  const [nodeSort, setNodeSort] = useState<NodeSort>('combined-asc')
   const [whitelist, setWhitelist] = useState<string[]>([])
   const [whitelistDomain, setWhitelistDomain] = useState('')
   const [advancedTab, setAdvancedTab] = useState<'config' | 'logs'>('logs')
@@ -289,7 +288,9 @@ export default function App() {
   async function testNodes(tag?: string, groupId = displayGroup?.id) {
     setBusy(true); setMessage('')
     if (!tag && !groupId) { setMessage('请先选择一个订阅分组。'); setBusy(false); return }
-    try { await request(tag ? `/api/nodes/${encodeURIComponent(tag)}/test` : `/api/groups/${encodeURIComponent(groupId!)}/nodes/test`, { method: 'POST' }); setMessage(tag ? '正在测速该节点，请稍候刷新结果。' : '正在并发测试当前分组全部节点，请稍候刷新结果。'); window.setTimeout(() => void refresh(), 1800) }
+    const label = testService === 'all' ? 'Google、Gemini、ChatGPT' : testService === 'google' ? 'Google' : testService === 'gemini' ? 'Gemini' : 'ChatGPT'
+    const endpoint = tag ? `/api/nodes/${encodeURIComponent(tag)}/test` : `/api/groups/${encodeURIComponent(groupId!)}/nodes/test`
+    try { await request(`${endpoint}?service=${testService}`, { method: 'POST' }); setMessage(tag ? `正在测试 ${label}，请稍候刷新结果。` : `正在并发测试当前分组的 ${label}，请稍候刷新结果。`); window.setTimeout(() => void refresh(), 1800) }
     catch (error) { setMessage(error instanceof Error ? error.message : '测速失败') }
     finally { setBusy(false) }
   }
@@ -338,31 +339,24 @@ export default function App() {
   const hasSubscriptions = subscriptions.length > 0
   const activeNodeName = displayGroup?.nodes.find((n) => n.tag === displayGroup.active)?.name ?? displayGroup?.active ?? '--'
 
-  const visibleNodes = displayGroup?.nodes.filter((node) => {
-    if (nodeFilter === 'gemini') return node.geminiSupport === 'supported'
-    if (nodeFilter === 'chatgpt') return node.chatgptSupport === 'supported'
-    if (nodeFilter === 'both') return node.geminiSupport === 'supported' && node.chatgptSupport === 'supported'
-    if (nodeFilter === 'not-supported') return node.geminiSupport !== 'supported' || node.chatgptSupport !== 'supported'
-    return true
-  }).sort((left, right) => {
+  const visibleNodes = displayGroup?.nodes.slice().sort((left, right) => {
     if (nodeSort === 'name') return left.name.localeCompare(right.name, 'zh-CN')
-    const leftHasDelay = left.delayMs > 0
-    const rightHasDelay = right.delayMs > 0
+    const delayField: keyof Pick<NodeStatus, 'delayMs' | 'googleDelayMs' | 'geminiDelayMs' | 'chatgptDelayMs'> =
+      nodeSort === 'google-asc' ? 'googleDelayMs'
+        : nodeSort === 'gemini-asc' ? 'geminiDelayMs'
+          : nodeSort === 'chatgpt-asc' ? 'chatgptDelayMs'
+            : 'delayMs'
+    const leftDelay = left[delayField]
+    const rightDelay = right[delayField]
+    const leftHasDelay = leftDelay > 0
+    const rightHasDelay = rightDelay > 0
     if (leftHasDelay !== rightHasDelay) return leftHasDelay ? -1 : 1
     if (!leftHasDelay) return 0
-    return nodeSort === 'latency-desc' ? right.delayMs - left.delayMs : left.delayMs - right.delayMs
+    return nodeSort === 'combined-desc' ? rightDelay - leftDelay : leftDelay - rightDelay
   })
 
-  function availabilityText(value: Availability) {
-    if (value === 'supported') return '支持'
-    if (value === 'unsupported') return '不支持'
-    return '未识别'
-  }
-
-  function delayBar(ms: number) {
-    if (ms <= 0) return 0
-    const pct = Math.max(8, Math.min(100, 100 - (ms - 50) / 8))
-    return pct
+  function formatDelay(ms: number) {
+    return ms > 0 ? `${ms}ms` : ms === -1 ? '×' : '--'
   }
 
   const customRouteRules = routeRules.filter((rule) => rule.editable && rule.value.toLowerCase().includes(routeSearch.trim().toLowerCase()))
@@ -534,7 +528,7 @@ export default function App() {
                   onClick={() => !busy && running && void toggleFailedNodeCleanup()}
                 />
               </div>
-              <button className="sm" disabled={busy || !running || !displayGroup} onClick={() => void testNodes()} title="只测试当前订阅分组"><Icon.Zap /> 测全部</button>
+              <button className="sm" disabled={busy || !running || !displayGroup} onClick={() => void testNodes()} title="按当前测速项目测试，只测试当前订阅分组"><Icon.Zap /> 测全部</button>
             </div>
           </div>
           {hasSubscriptions && nodesState && (
@@ -547,18 +541,20 @@ export default function App() {
                 ))}
               </div>
               <div className="filter-bar">
-                <label>筛选</label>
-                <select value={nodeFilter} onChange={(e) => setNodeFilter(e.target.value as NodeFilter)}>
-                  <option value="all">全部</option>
-                  <option value="both">Gemini+ChatGPT</option>
+                <label>测速项目</label>
+                <select value={testService} onChange={(e) => setTestService(e.target.value as TestService)}>
+                  <option value="all">全部服务</option>
+                  <option value="google">Google</option>
                   <option value="gemini">Gemini</option>
                   <option value="chatgpt">ChatGPT</option>
-                  <option value="not-supported">不支持</option>
                 </select>
                 <label>排序</label>
                 <select value={nodeSort} onChange={(e) => setNodeSort(e.target.value as NodeSort)}>
-                  <option value="latency-asc">延迟↑</option>
-                  <option value="latency-desc">延迟↓</option>
+                  <option value="combined-asc">综合延迟↑</option>
+                  <option value="combined-desc">综合延迟↓</option>
+                  <option value="google-asc">Google 延迟↑</option>
+                  <option value="gemini-asc">Gemini 延迟↑</option>
+                  <option value="chatgpt-asc">ChatGPT 延迟↑</option>
                   <option value="name">名称</option>
                 </select>
                 <span className="count"><b>{visibleNodes?.length ?? 0}</b>/{displayGroup?.nodes.length ?? 0}</span>
@@ -569,18 +565,17 @@ export default function App() {
         <div className="nlist">
           {hasSubscriptions && visibleNodes && visibleNodes.length > 0 ? (
             visibleNodes.map((node) => {
-              const dp = node.delayMs > 0 ? 'ok' : node.delayMs === -1 ? 'bad' : 'idle'
               return (
                 <div className={node.tag === displayGroup?.active ? 'nrow on' : 'nrow'} key={node.tag}>
                   <span className="nm">{node.name}{node.tag === displayGroup?.active && <span className="badge">活跃</span>}</span>
                   <span className="ctry">{node.country}</span>
-                  <span className="svcs">
-                    <span className={`svc ${node.geminiSupport === 'supported' ? 'yes' : node.geminiSupport === 'unsupported' ? 'no' : 'unk'}`}>Gemini {node.geminiSupport === 'supported' ? '✓' : node.geminiSupport === 'unsupported' ? '✗' : '?'}</span>
-                    <span className={`svc ${node.chatgptSupport === 'supported' ? 'yes' : node.chatgptSupport === 'unsupported' ? 'no' : 'unk'}`}>ChatGPT {node.chatgptSupport === 'supported' ? '✓' : node.chatgptSupport === 'unsupported' ? '✗' : '?'}</span>
+                  <span className="service-latencies" title={node.error || '实际服务延迟：Google、Gemini、ChatGPT'}>
+                    <span className={`lat ${node.googleDelayMs > 0 ? 'ok' : node.googleDelayMs === -1 ? 'bad' : 'idle'}`}>G {formatDelay(node.googleDelayMs)}</span>
+                    <span className={`lat ${node.geminiDelayMs > 0 ? 'ok' : node.geminiDelayMs === -1 ? 'bad' : 'idle'}`}>Gemini {formatDelay(node.geminiDelayMs)}</span>
+                    <span className={`lat ${node.chatgptDelayMs > 0 ? 'ok' : node.chatgptDelayMs === -1 ? 'bad' : 'idle'}`}>GPT {formatDelay(node.chatgptDelayMs)}</span>
                   </span>
-                  <span className={`lat ${dp}`}>{node.delayMs > 0 ? `${node.delayMs}ms` : node.delayMs === -1 ? '×' : '--'}</span>
                   <span className="btns">
-                    <button className="ghost sm" disabled={busy || !running} onClick={() => void testNodes(node.tag)}>测速</button>
+                    <button className="ghost sm" disabled={busy || !running} onClick={() => void testNodes(node.tag)} title="按当前测速项目测试">测速</button>
                     <button className="sm" disabled={busy || !running} onClick={() => displayGroup && void chooseNode(displayGroup.id, 'manual', node.tag)}>使用</button>
                   </span>
                 </div>

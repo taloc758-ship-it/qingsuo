@@ -187,12 +187,8 @@ button svg { width: 13px; height: 13px; flex-shrink: 0; }
 .nrow .badge { display: inline-flex; align-items: center; gap: 3px; font-size: .58rem; font-weight: 600; color: var(--accent); flex-shrink: 0; }
 .nrow .badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .nrow .ctry { font-size: .68rem; color: var(--text-3); width: 44px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nrow .svcs { display: flex; gap: 3px; flex-shrink: 0; }
-.svc { font-size: .6rem; font-weight: 600; padding: 1px 6px; border-radius: 999px; }
-.svc.yes { color: var(--green); background: rgba(34,197,94,.07); }
-.svc.no { color: var(--red); background: rgba(239,68,68,.06); }
-.svc.unk { color: var(--amber); background: rgba(245,158,11,.07); }
-.nrow .lat { font-weight: 700; font-variant-numeric: tabular-nums; padding: 2px 7px; border-radius: 999px; font-size: .68rem; width: 52px; text-align: center; flex-shrink: 0; }
+.service-latencies { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.nrow .lat { font-weight: 700; font-variant-numeric: tabular-nums; padding: 2px 6px; border-radius: 999px; font-size: .64rem; min-width: 50px; text-align: center; flex-shrink: 0; }
 .nrow .lat.ok { color: var(--green); background: rgba(34,197,94,.08); }
 .nrow .lat.bad { color: var(--red); background: rgba(239,68,68,.08); }
 .nrow .lat.idle { color: var(--text-3); background: var(--surface-3); }

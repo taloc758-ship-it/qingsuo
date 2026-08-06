@@ -22,6 +22,7 @@ func newTestApp(t *testing.T) *app {
 		whitelist:     filepath.Join(dir, "whitelist.json"),
 		autoSwitch:    filepath.Join(dir, "auto-switch.json"),
 		nodeCleanup:   filepath.Join(dir, "failed-node-cleanup.json"),
+		delays:        make(map[string]serviceDelays),
 	}
 	if err := a.ensureConfig(); err != nil {
 		t.Fatalf("ensureConfig: %v", err)
@@ -265,20 +266,50 @@ func TestParseSingboxConfigNodes(t *testing.T) {
 
 func TestClassifyNodeAvailability(t *testing.T) {
 	tests := []struct {
-		name           string
-		country        string
-		geminiSupport  string
-		chatGPTSupport string
+		name    string
+		country string
 	}{
-		{name: "🇭🇰香港 01", country: "香港", geminiSupport: availabilitySupported, chatGPTSupport: availabilityUnsupported},
-		{name: "🇺🇸美国 01", country: "美国", geminiSupport: availabilitySupported, chatGPTSupport: availabilitySupported},
-		{name: "provider node", country: "未识别", geminiSupport: availabilityUnknown, chatGPTSupport: availabilityUnknown},
+		{name: "🇭🇰香港 01", country: "香港"},
+		{name: "🇺🇸美国 01", country: "美国"},
+		{name: "provider node", country: "未识别"},
 	}
 	for _, test := range tests {
 		result := classifyNodeAvailability(test.name)
-		if result.Country != test.country || result.GeminiSupport != test.geminiSupport || result.ChatGPTSupport != test.chatGPTSupport {
+		if result.Country != test.country {
 			t.Fatalf("classify %q = %#v", test.name, result)
 		}
+	}
+}
+
+func TestParseDelayTestService(t *testing.T) {
+	for raw, want := range map[string]delayTestService{
+		"":        delayTestAll,
+		"google":  delayTestGoogle,
+		"gemini":  delayTestGemini,
+		"chatgpt": delayTestChatGPT,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/nodes/test?service="+raw, nil)
+		got, err := parseDelayTestService(request)
+		if err != nil || got != want {
+			t.Fatalf("service %q = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/nodes/test?service=unsupported", nil)
+	if _, err := parseDelayTestService(request); err == nil {
+		t.Fatal("unsupported service was accepted")
+	}
+}
+
+func TestServiceDelayMergePreservesOtherResults(t *testing.T) {
+	current := serviceDelays{Google: 100, Gemini: 200, ChatGPT: 300}
+	updated := current.merge(serviceDelays{Gemini: 250}, delayTestGemini)
+	want := serviceDelays{Google: 100, Gemini: 250, ChatGPT: 300}
+	if updated != want {
+		t.Fatalf("merged result = %#v, want %#v", updated, want)
+	}
+	all := current.merge(serviceDelays{Google: 400, Gemini: 500, ChatGPT: 600}, delayTestAll)
+	if all != (serviceDelays{Google: 400, Gemini: 500, ChatGPT: 600}) {
+		t.Fatalf("all-services result = %#v", all)
 	}
 }
 

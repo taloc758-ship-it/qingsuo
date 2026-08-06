@@ -93,7 +93,10 @@ try {
         & npm install
         if ($LASTEXITCODE -ne 0) { throw "Electron dependencies installation failed." }
     }
-    & npm run dist
+    # electron-builder defaults to the package.json output directory. Override
+    # it here so OutputDirectory controls both the builder output and handoff.
+    $builder = Join-Path $desktopDirectory "node_modules\.bin\electron-builder.cmd"
+    & $builder --win dir --x64 "--config.directories.output=$releaseDirectory"
     if ($LASTEXITCODE -ne 0) { throw "Electron packaging failed." }
 } finally { Pop-Location }
 

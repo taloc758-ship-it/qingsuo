@@ -103,8 +103,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 const Icon = {
   Shield: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 4 5v6c0 5 3.5 8 8 11 4.5-3 8-6 8-11V5l-8-3Z" /></svg>),
-  Play: () => (<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>),
-  Stop: () => (<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>),
+  Minimize: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 12h12" /></svg>),
+  Maximize: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>),
   Refresh: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /></svg>),
   Trash: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></svg>),
   Plus: () => (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>),
@@ -121,6 +121,7 @@ const Icon = {
 }
 
 export default function App() {
+  const [desktopWindow] = useState(() => Boolean(window.qingSuoWindow))
   const [status, setStatus] = useState<Status | null>(null)
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([])
   const [subscriptionURL, setSubscriptionURL] = useState('')
@@ -190,14 +191,14 @@ export default function App() {
     }
   }, [logs, autoScroll, advancedTab])
 
-  async function action(url: string) {
+  async function restartCore() {
     setBusy(true); setMessage('')
     try {
-      await request<Status>(url, { method: 'POST' })
-      if (url === '/api/stop') setMessage('代理已停止，Windows 系统代理已自动关闭。')
+      await request<Status>('/api/restart', { method: 'POST' })
+      setMessage('代理核心已重启，系统代理设置保持不变。')
       await refresh()
     }
-    catch (error) { setMessage(error instanceof Error ? error.message : '操作失败') }
+    catch (error) { setMessage(error instanceof Error ? error.message : '重启失败') }
     finally { setBusy(false) }
   }
 
@@ -386,9 +387,15 @@ export default function App() {
         </div>
         <div className="topbar-spacer" />
         <div className="topbar-actions">
-          <button disabled={busy || running} onClick={() => void action('/api/start')}><Icon.Play /> 启动</button>
-          <button className="ghost" disabled={busy || !running} onClick={() => void action('/api/stop')}><Icon.Stop /></button>
+          <button className="ghost" disabled={busy} onClick={() => void restartCore()}><Icon.Refresh /> 重启</button>
         </div>
+        {desktopWindow && (
+          <div className="window-controls" aria-label="窗口控制">
+            <button className="window-control" title="最小化" aria-label="最小化" onClick={() => void window.qingSuoWindow?.minimize()}><Icon.Minimize /></button>
+            <button className="window-control" title="最大化或还原" aria-label="最大化或还原" onClick={() => void window.qingSuoWindow?.toggleMaximize()}><Icon.Maximize /></button>
+            <button className="window-control close" title="隐藏到托盘" aria-label="隐藏到托盘" onClick={() => void window.qingSuoWindow?.hide()}><Icon.X /></button>
+          </div>
+        )}
       </div>
 
       {message && <div className="toast"><Icon.Info /> {message}</div>}

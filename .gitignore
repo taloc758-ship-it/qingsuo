@@ -37,4 +37,18 @@ Lib/
 # Build and portable package output.
 .package-staging/
 release*/
-backend/web/dist/
+backend/qingsuo-icon.syso
+backend/qingsuo-icon.res
+.package-go-cache/
+.proxy-fix-go-cache/
+.electron-staging/
+desktop/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+# Local icon design previews; the final application asset is qingsuo-sixfold.ico.
+assets/qingsuo-*.png
+assets/qingsuo-symmetric.ico
+assets/qingsuo.ico
+assets/qingsuo.rc

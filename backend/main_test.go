@@ -49,7 +49,7 @@ func TestEnsureConfigCreatesValidDirectTemplate(t *testing.T) {
 	}
 }
 
-func TestAPIConfigSaveAndStartWithoutBinary(t *testing.T) {
+func TestAPIConfigSaveAndRestartWithoutBinary(t *testing.T) {
 	a := newTestApp(t)
 	handler := a.handler()
 
@@ -70,11 +70,11 @@ func TestAPIConfigSaveAndStartWithoutBinary(t *testing.T) {
 		t.Fatalf("save config status = %d: %s", putResponse.Code, putResponse.Body.String())
 	}
 
-	start := httptest.NewRequest(http.MethodPost, "/api/start", nil)
-	startResponse := httptest.NewRecorder()
-	handler.ServeHTTP(startResponse, start)
-	if startResponse.Code != http.StatusBadRequest || !strings.Contains(startResponse.Body.String(), "binary not found") {
-		t.Fatalf("expected missing binary error, got %d: %s", startResponse.Code, startResponse.Body.String())
+	restart := httptest.NewRequest(http.MethodPost, "/api/restart", nil)
+	restartResponse := httptest.NewRecorder()
+	handler.ServeHTTP(restartResponse, restart)
+	if restartResponse.Code != http.StatusBadRequest || !strings.Contains(restartResponse.Body.String(), "binary not found") {
+		t.Fatalf("expected missing binary error, got %d: %s", restartResponse.Code, restartResponse.Body.String())
 	}
 }
 
@@ -92,11 +92,37 @@ func TestIsLocalProxyServer(t *testing.T) {
 }
 
 func TestFrontendHandlerServesEmbeddedIndex(t *testing.T) {
+	webDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<div id=\"root\"></div>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SINGBOX_WEB_DIR", webDir)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	response := httptest.NewRecorder()
 	frontendHandler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "<div id=\"root\"></div>") {
 		t.Fatalf("frontend response = %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestFrontendHandlerRequiresExternalWebDirectory(t *testing.T) {
+	t.Setenv("SINGBOX_WEB_DIR", "")
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	response := httptest.NewRecorder()
+	frontendHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("frontend response = %d", response.Code)
+	}
+}
+
+func TestConfigureListenAddressUsesValidCustomPort(t *testing.T) {
+	t.Setenv("SINGBOX_WEB_LISTEN_PORT", "8788")
+	previous := listenAddress
+	t.Cleanup(func() { listenAddress = previous })
+	listenAddress = defaultListenAddress
+	configureListenAddress()
+	if listenAddress != "127.0.0.1:8788" {
+		t.Fatalf("listen address = %q", listenAddress)
 	}
 }
 

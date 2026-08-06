@@ -1,22 +1,36 @@
-# 青梭 QingSuo
+# QingSuo
 
-轻量的本地智能代理控制台，基于 sing-box 自动代理组运行。
+Windows desktop proxy console built around sing-box. It supports subscription groups,
+node latency tests, automatic failover, route rules, Windows system-proxy control, and
+a tray-resident desktop experience.
+
+## Stack
+
+- Desktop: Electron
+- Frontend: React, TypeScript, Vite
+- Backend: Go standard-library HTTP service
+- Proxy core: sing-box
+- Packaging: electron-builder and Go
 
 ## Prerequisites
 
-- Node.js 22+ (installed)
-- Go 1.26+ (a project-local copy is included in `../.tools/go` for this workspace)
-- A `sing-box.exe` binary placed at `backend/data/bin/sing-box.exe`, or set `SINGBOX_BINARY` to its full path
+- Node.js 22 or newer
+- Go 1.26 or newer
+- A Windows `sing-box.exe` placed at `backend\data\bin\sing-box.exe`
 
-## Run in development
+The sing-box executable is intentionally not committed. Download a compatible Windows
+build from the official sing-box releases before packaging.
 
-Open two PowerShell terminals from this directory:
+## Development
+
+Start the backend:
 
 ```powershell
-$env:PATH = "D:\v2rayN-master\.tools\go\go\bin;$env:PATH"
 cd backend
 go run .
 ```
+
+In another terminal, start the frontend:
 
 ```powershell
 cd frontend
@@ -24,13 +38,25 @@ npm install
 npm run dev
 ```
 
-Open the Vite address shown in the second terminal. The page proxies `/api` requests to the Go service at `http://127.0.0.1:8787`.
+## Build the desktop app
 
-## What the first version does
+Run this from the project root:
 
-- Stores an editable sing-box configuration in `backend/data/config.json`.
-- Creates SOCKS (`127.0.0.1:2080`) and HTTP (`127.0.0.1:2081`) proxies with direct routing by default, so it can start before nodes are added.
-- Starts and stops one local sing-box process.
-- Exposes status, configuration, log, start, and stop endpoints for the React UI.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\package-electron.ps1
+```
 
-The default configuration has no proxy nodes and therefore routes directly. Once nodes are available, replace the direct outbound with a `urltest` outbound that lists their tags, then set `route.final` to that `urltest` tag.
+The folder build is created at `release-electron\青梭桌面版`. Launch `QingSuo.exe`.
+The target computer does not need Go, Node.js, Python, or a separately started backend.
+
+## Data and web resources
+
+The app stores subscriptions, selected nodes, route rules, and automatic-switch settings
+beside the executable:
+
+```text
+青梭桌面版\data\
+```
+
+The web frontend stays external to the executable at `resources\web`. Replacing its
+`index.html` or files under `assets` takes effect after restarting the app.

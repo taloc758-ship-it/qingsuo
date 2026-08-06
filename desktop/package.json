@@ -1,0 +1,50 @@
+{
+  "name": "qingsuo-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QingSuo desktop proxy console",
+  "main": "main.cjs",
+  "scripts": {
+    "dist": "electron-builder --win dir --x64"
+  },
+  "devDependencies": {
+    "electron": "32.3.3",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.qingsuo.desktop.sixfold",
+    "productName": "青梭",
+    "directories": {
+      "output": "../release-electron",
+      "buildResources": "../assets"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../.electron-staging/backend",
+        "to": "backend"
+      },
+      {
+        "from": "../.electron-staging/web",
+        "to": "web"
+      },
+      {
+        "from": "../assets/qingsuo-sixfold.ico",
+        "to": "qingsuo-sixfold.ico"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "icon": "../assets/qingsuo-sixfold.ico",
+      "executableName": "QingSuo",
+      "requestedExecutionLevel": "asInvoker",
+      "target": [
+        "dir"
+      ]
+    }
+  }
+}

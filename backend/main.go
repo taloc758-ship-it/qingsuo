@@ -2,19 +2,17 @@ package main
 
 import (
 	"context"
-	"embed"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -24,11 +22,11 @@ import (
 )
 
 const (
-	listenAddress  = "127.0.0.1:8787"
-	maxLogBytes    = 128 * 1024
-	clashAPIURL    = "http://127.0.0.1:9090"
-	selectorTag    = "proxy"
-	latencyTestURL = "https://www.gstatic.com/generate_204"
+	defaultListenAddress = "127.0.0.1:8787"
+	maxLogBytes          = 128 * 1024
+	clashAPIURL          = "http://127.0.0.1:9090"
+	selectorTag          = "proxy"
+	latencyTestURL       = "https://www.gstatic.com/generate_204"
 	// sing-box defines urltest tolerance as uint16. Its largest valid value is
 	// far above ordinary latency, so it prevents latency-only switching.
 	failoverTolerance = 65535
@@ -41,15 +39,11 @@ const (
 //go:embed defaults/config.json
 var defaultConfig []byte
 
-// frontendFiles is replaced with the latest Vite build by package.ps1 before
-// compiling a portable release. The final executable then needs no Node.js.
-//
-//go:embed web
-var frontendFiles embed.FS
-
 // packagedBuild is set by package.ps1 so a portable executable keeps data
 // alongside itself. Development runs continue to use the working directory.
 var packagedBuild = "false"
+
+var listenAddress = defaultListenAddress
 
 type app struct {
 	mu            sync.Mutex
@@ -236,6 +230,7 @@ type clashProxy struct {
 }
 
 func main() {
+	configureListenAddress()
 	dataDir := os.Getenv("SINGBOX_WEB_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "data"
@@ -296,14 +291,26 @@ func main() {
 	}
 }
 
+func configureListenAddress() {
+	port := strings.TrimSpace(os.Getenv("SINGBOX_WEB_LISTEN_PORT"))
+	if port == "" {
+		return
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil || value < 1 || value > 65535 {
+		log.Fatalf("invalid SINGBOX_WEB_LISTEN_PORT: %q", port)
+	}
+	listenAddress = "127.0.0.1:" + strconv.Itoa(value)
+}
+
 func (a *app) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", a.handleStatus)
 	mux.HandleFunc("GET /api/config", a.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", a.handleSaveConfig)
 	mux.HandleFunc("GET /api/logs", a.handleLogs)
-	mux.HandleFunc("POST /api/start", a.handleStart)
-	mux.HandleFunc("POST /api/stop", a.handleStop)
+	mux.HandleFunc("POST /api/restart", a.handleRestart)
+	mux.HandleFunc("POST /api/exit", a.handleExit)
 	mux.HandleFunc("GET /api/system-proxy", a.handleSystemProxyStatus)
 	mux.HandleFunc("POST /api/system-proxy", a.handleSystemProxyUpdate)
 	mux.HandleFunc("GET /api/auto-switch", a.handleAutoSwitchStatus)
@@ -328,6 +335,11 @@ func (a *app) handler() http.Handler {
 }
 
 func shouldOpenBrowser() bool {
+	// A portable build is launched by double-clicking the executable, so it
+	// opens its local control page. Electron disables this for its child process.
+	if packagedBuild == "true" {
+		return os.Getenv("SINGBOX_WEB_OPEN_BROWSER") != "false"
+	}
 	for _, argument := range os.Args[1:] {
 		if argument == "--open" {
 			return true
@@ -341,36 +353,37 @@ func openBrowser() {
 		return
 	}
 	time.Sleep(300 * time.Millisecond)
-	if err := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "http://127.0.0.1:8787/").Start(); err != nil {
+	command := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", fmt.Sprintf("http://%s/", listenAddress))
+	configureBackgroundCommand(command)
+	if err := command.Start(); err != nil {
 		log.Printf("open browser: %v", err)
 	}
 }
 
 func frontendHandler() http.Handler {
-	files, err := fs.Sub(frontendFiles, "web/dist")
-	if err != nil {
+	webDir := strings.TrimSpace(os.Getenv("SINGBOX_WEB_DIR"))
+	if webDir == "" {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "frontend build is missing; run package.ps1", http.StatusServiceUnavailable)
+			http.Error(w, "frontend directory is missing; set SINGBOX_WEB_DIR", http.StatusServiceUnavailable)
 		})
 	}
-	fileServer := http.FileServer(http.FS(files))
+	indexPath := filepath.Join(webDir, "index.html")
+	if info, err := os.Stat(indexPath); err != nil || info.IsDir() {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "frontend index is missing: "+indexPath, http.StatusServiceUnavailable)
+		})
+	}
+	fileServer := http.FileServer(http.Dir(webDir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Path != "/" {
-			name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
-			if _, err := fs.Stat(files, name); err != nil {
-				if strings.HasPrefix(name, "assets/") {
-					http.NotFound(w, r)
-					return
-				}
-				clone := r.Clone(r.Context())
-				clone.URL.Path = "/"
-				fileServer.ServeHTTP(w, clone)
-				return
-			}
+		if r.URL.Path == "/" || (!strings.HasPrefix(r.URL.Path, "/assets/") && filepath.Ext(r.URL.Path) == "") {
+			clone := r.Clone(r.Context())
+			clone.URL.Path = "/"
+			fileServer.ServeHTTP(w, clone)
+			return
 		}
 		fileServer.ServeHTTP(w, r)
 	})
@@ -565,6 +578,7 @@ func (a *app) start() error {
 	}
 	checkCmd := exec.Command(binary, "check", "-c", config)
 	checkCmd.Dir = filepath.Dir(config)
+	configureBackgroundCommand(checkCmd)
 	if output, err := checkCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("configuration is invalid: %s", strings.TrimSpace(string(output)))
 	}
@@ -572,6 +586,7 @@ func (a *app) start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, binary, "run", "-c", config)
 	cmd.Dir = filepath.Dir(config)
+	configureBackgroundCommand(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -705,7 +720,13 @@ func (a *app) handleLogs(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"content": logs})
 }
 
-func (a *app) handleStart(w http.ResponseWriter, _ *http.Request) {
+// handleRestart reloads the generated configuration without changing the
+// Windows system-proxy setting.
+func (a *app) handleRestart(w http.ResponseWriter, _ *http.Request) {
+	if err := a.stopAndWait(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if err := a.start(); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -713,7 +734,9 @@ func (a *app) handleStart(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusAccepted, a.status())
 }
 
-func (a *app) handleStop(w http.ResponseWriter, _ *http.Request) {
+// handleExit is used only when the desktop application is actually quitting.
+// A regular stop keeps the user's system-proxy choice untouched.
+func (a *app) handleExit(w http.ResponseWriter, _ *http.Request) {
 	// Only clear the system proxy when it is still pointing at this local
 	// instance. Do not overwrite a proxy configuration another app installed.
 	if proxy, err := systemProxyStatus(); err == nil && proxy.Enabled && isLocalProxyServer(proxy.Server) {
@@ -823,50 +846,9 @@ func (a *app) handleFailedNodeCleanupUpdate(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, settings)
 }
 
-func systemProxyStatus() (systemProxyResponse, error) {
-	if runtime.GOOS != "windows" {
-		return systemProxyResponse{Supported: false}, nil
-	}
-	output, err := exec.Command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", "ProxyEnable").CombinedOutput()
-	if err != nil {
-		return systemProxyResponse{}, fmt.Errorf("read ProxyEnable: %s", strings.TrimSpace(string(output)))
-	}
-	enabled := strings.Contains(string(output), "0x1")
-	serverOutput, _ := exec.Command("reg", "query", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", "ProxyServer").CombinedOutput()
-	fields := strings.Fields(string(serverOutput))
-	server := ""
-	if len(fields) >= 3 {
-		server = fields[len(fields)-1]
-	}
-	return systemProxyResponse{Supported: true, Enabled: enabled, Server: server}, nil
-}
-
 func isLocalProxyServer(server string) bool {
 	server = strings.TrimSpace(strings.ToLower(server))
 	return server == "127.0.0.1:2081" || server == "localhost:2081"
-}
-
-func setSystemProxy(enabled bool) error {
-	if runtime.GOOS != "windows" {
-		return errors.New("system proxy control is currently supported only on Windows")
-	}
-	if enabled {
-		if output, err := exec.Command("reg", "add", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", "ProxyServer", "/t", "REG_SZ", "/d", "127.0.0.1:2081", "/f").CombinedOutput(); err != nil {
-			return fmt.Errorf("set ProxyServer: %s", strings.TrimSpace(string(output)))
-		}
-		if output, err := exec.Command("reg", "add", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", "ProxyOverride", "/t", "REG_SZ", "/d", "<local>;localhost;127.0.0.1", "/f").CombinedOutput(); err != nil {
-			return fmt.Errorf("set ProxyOverride: %s", strings.TrimSpace(string(output)))
-		}
-	}
-	value := "0"
-	if enabled {
-		value = "1"
-	}
-	if output, err := exec.Command("reg", "add", `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`, "/v", "ProxyEnable", "/t", "REG_DWORD", "/d", value, "/f").CombinedOutput(); err != nil {
-		return fmt.Errorf("set ProxyEnable: %s", strings.TrimSpace(string(output)))
-	}
-	// WinINet clients notice this registry update immediately; Chromium rechecks it on the next navigation.
-	return nil
 }
 
 func (a *app) handleListSubscriptions(w http.ResponseWriter, _ *http.Request) {
@@ -1727,6 +1709,7 @@ func (a *app) validateConfig(config []byte) error {
 	}
 	checkCmd := exec.Command(a.binary, "check", "-c", temporaryPath)
 	checkCmd.Dir = a.dataDir
+	configureBackgroundCommand(checkCmd)
 	output, err := checkCmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("generated sing-box configuration is invalid: %s", strings.TrimSpace(string(output)))

@@ -23,7 +23,7 @@ type NodeStatus = {
 type GroupStatus = {
   id: string
   name: string
-  mode: 'auto' | 'manual'
+  auto: boolean
   active: string
   nodes: NodeStatus[]
 }
@@ -47,9 +47,20 @@ type SubscriptionsResponse = {
 }
 
 type SystemProxy = {
-  supported: boolean
-  enabled: boolean
-  server?: string
+	supported: boolean
+	enabled: boolean
+	server?: string
+}
+
+type RoutingMode = {
+	globalProxy: boolean
+}
+
+type TunMode = {
+	supported: boolean
+	enabled: boolean
+	configured: boolean
+	elevated: boolean
 }
 
 type WhitelistResponse = {
@@ -71,8 +82,29 @@ type RouteRulesResponse = {
 }
 
 type AutoSwitchSettings = {
+  autoSelection: boolean
   failoverOnly: boolean
+  switchInterval: SwitchInterval
 }
+
+type SwitchInterval = '30s' | '1m' | '3m' | '5m' | '10m' | '30m'
+type ThemeName = 'carbon' | 'ocean' | 'paper' | 'contrast'
+
+const themes: Array<{ value: ThemeName, label: string }> = [
+  { value: 'carbon', label: '碳黑绿' },
+  { value: 'ocean', label: '深海蓝' },
+  { value: 'paper', label: '纸白红' },
+  { value: 'contrast', label: '高对比' },
+]
+
+const switchIntervals: Array<{ value: SwitchInterval, label: string }> = [
+  { value: '30s', label: '30 秒' },
+  { value: '1m', label: '1 分钟' },
+  { value: '3m', label: '3 分钟' },
+  { value: '5m', label: '5 分钟' },
+  { value: '10m', label: '10 分钟' },
+  { value: '30m', label: '30 分钟' },
+]
 
 type FailedNodeCleanupSettings = {
   removeFailed: boolean
@@ -126,6 +158,9 @@ export default function App() {
   const [subscriptionURL, setSubscriptionURL] = useState('')
   const [nodesState, setNodesState] = useState<NodesResponse | null>(null)
   const [systemProxy, setSystemProxy] = useState<SystemProxy | null>(null)
+  const [routingMode, setRoutingMode] = useState<RoutingMode>({ globalProxy: false })
+	const [tunMode, setTunMode] = useState<TunMode | null>(null)
+  const [autoLaunch, setAutoLaunch] = useState<AutoLaunchSettings | null>(null)
   const [config, setConfig] = useState('')
   const [logs, setLogs] = useState('')
   const [message, setMessage] = useState('')
@@ -141,18 +176,24 @@ export default function App() {
   const [routeRules, setRouteRules] = useState<RouteRule[]>([])
   const [routeRulesModalOpen, setRouteRulesModalOpen] = useState(false)
   const [routeSearch, setRouteSearch] = useState('')
-  const [autoSwitch, setAutoSwitch] = useState<AutoSwitchSettings>({ failoverOnly: false })
+  const [autoSwitch, setAutoSwitch] = useState<AutoSwitchSettings>({ autoSelection: true, failoverOnly: false, switchInterval: '5m' })
+  const [theme, setTheme] = useState<ThemeName>(() => {
+    const saved = window.localStorage.getItem('qingsuo-theme')
+    return themes.some((candidate) => candidate.value === saved) ? saved as ThemeName : 'carbon'
+  })
   const [failedNodeCleanup, setFailedNodeCleanup] = useState<FailedNodeCleanupSettings>({ removeFailed: false })
   const logRef = useRef<HTMLPreElement>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, nextConfig, nextLogs, nextSubs, nextSystemProxy, nextWhitelist, nextRouteRules, nextAutoSwitch, nextFailedNodeCleanup] = await Promise.all([
+      const [nextStatus, nextConfig, nextLogs, nextSubs, nextSystemProxy, nextRoutingMode, nextTunMode, nextWhitelist, nextRouteRules, nextAutoSwitch, nextFailedNodeCleanup] = await Promise.all([
         request<Status>('/api/status'),
         request<{ content: string }>('/api/config'),
         request<{ content: string }>('/api/logs'),
         request<SubscriptionsResponse>('/api/subscriptions'),
         request<SystemProxy>('/api/system-proxy'),
+        request<RoutingMode>('/api/routing-mode'),
+			request<TunMode>('/api/tun-mode'),
         request<WhitelistResponse>('/api/whitelist'),
         request<RouteRulesResponse>('/api/route-rules'),
         request<AutoSwitchSettings>('/api/auto-switch'),
@@ -163,6 +204,8 @@ export default function App() {
       setLogs(nextLogs.content)
       setSubscriptions(nextSubs.groups)
       setSystemProxy(nextSystemProxy)
+      setRoutingMode(nextRoutingMode)
+			setTunMode(nextTunMode)
       setWhitelist(nextWhitelist.domains)
       setRouteRules(nextRouteRules.rules)
       setAutoSwitch(nextAutoSwitch)
@@ -185,10 +228,24 @@ export default function App() {
   }, [refresh])
 
   useEffect(() => {
+    if (!desktopWindow) return
+    let active = true
+    void window.qingSuoWindow?.getAutoLaunchSettings()
+      .then((settings) => { if (active) setAutoLaunch(settings) })
+      .catch(() => { if (active) setMessage('无法读取开机自启动设置。') })
+    return () => { active = false }
+  }, [desktopWindow])
+
+  useEffect(() => {
     if (autoScroll && advancedTab === 'logs' && logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight
     }
   }, [logs, autoScroll, advancedTab])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    window.localStorage.setItem('qingsuo-theme', theme)
+  }, [theme])
 
   async function restartCore() {
     setBusy(true); setMessage('')
@@ -238,24 +295,27 @@ export default function App() {
     finally { setBusy(false) }
   }
 
-  async function chooseNode(groupId: string, mode: 'auto' | 'manual', tag = '') {
+  async function chooseNode(groupId: string, mode: 'auto' | 'node', tag = '') {
     setBusy(true); setMessage('')
-    try { const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId, mode, tag }) }); setNodesState(result); setMessage(mode === 'auto' ? '已切回自动选优。' : '已切换为手动节点。') }
+    try { const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId, mode, tag }) }); setNodesState(result); setMessage(mode === 'auto' ? '已切换到自动选优。' : '已使用此节点；自动选择状态不变。') }
     catch (error) { setMessage(error instanceof Error ? error.message : '切换节点失败') }
     finally { setBusy(false) }
   }
 
   async function toggleAutoSelection() {
     if (!displayGroup) return
-    if (displayGroup.mode !== 'auto' && displayGroup.active) {
-      await chooseNode(displayGroup.id, 'auto')
-      return
-    }
-    if (!displayGroup.active) {
-      setMessage('当前自动节点仍在探测中，暂时无法固定。')
-      return
-    }
-    await chooseNode(displayGroup.id, 'manual', displayGroup.active)
+    const next = !autoSwitch.autoSelection
+    setBusy(true); setMessage('')
+    try {
+      const result = await request<AutoSwitchSettings>('/api/auto-switch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ failoverOnly: autoSwitch.failoverOnly, autoSelection: next }),
+      })
+      setAutoSwitch(result)
+      setMessage(result.autoSelection ? '已开启自动选择。' : '已关闭自动选择，当前节点将保持不变。')
+      await refresh()
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动选择失败') }
+    finally { setBusy(false) }
   }
 
   async function toggleFailoverOnly() {
@@ -263,12 +323,25 @@ export default function App() {
     setBusy(true); setMessage('')
     try {
       const result = await request<AutoSwitchSettings>('/api/auto-switch', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ failoverOnly: next }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ failoverOnly: next, autoSelection: autoSwitch.autoSelection }),
       })
       setAutoSwitch(result)
       setMessage(result.failoverOnly ? '已启用故障才切换：当前节点可用时不会因延迟更低而切换。' : '已启用延迟优选：自动组会优先选择更低延迟节点。')
       await refresh()
     } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动切换设置失败') }
+    finally { setBusy(false) }
+  }
+
+  async function changeSwitchInterval(switchInterval: SwitchInterval) {
+    setBusy(true); setMessage('')
+    try {
+      const result = await request<AutoSwitchSettings>('/api/auto-switch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ switchInterval }),
+      })
+      setAutoSwitch(result)
+      const label = switchIntervals.find((item) => item.value === result.switchInterval)?.label ?? result.switchInterval
+      setMessage(`自动选优周期已设为 ${label}。`)
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动切换周期失败') }
     finally { setBusy(false) }
   }
 
@@ -300,6 +373,47 @@ export default function App() {
     setBusy(true); setMessage('')
     try { const result = await request<SystemProxy>('/api/system-proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }); setSystemProxy(result); setMessage(enabled ? 'Windows 系统代理已启用，浏览器流量将通过当前节点。' : 'Windows 系统代理已关闭。') }
     catch (error) { setMessage(error instanceof Error ? error.message : '更新系统代理失败') }
+    finally { setBusy(false) }
+  }
+
+  async function toggleGlobalProxy() {
+    const globalProxy = !routingMode.globalProxy
+    setBusy(true); setMessage('')
+    try {
+      const result = await request<RoutingMode>('/api/routing-mode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ globalProxy }),
+      })
+      setRoutingMode(result)
+      setMessage(result.globalProxy ? '已开启全局代理：所有流量均通过当前代理节点。' : '已恢复规则分流：大陆和自定义白名单直连。')
+      await refresh()
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新全局代理模式失败') }
+    finally { setBusy(false) }
+  }
+
+  async function toggleTunMode() {
+    if (!tunMode?.supported) return
+		const enabled = !tunMode.configured
+    setBusy(true); setMessage('')
+    try {
+      const result = await request<TunMode>('/api/tun-mode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+      })
+      setTunMode(result)
+      setMessage(result.enabled ? 'TUN 模式已开启：不遵守系统代理的软件也会接入青梭。' : 'TUN 模式已关闭，虚拟网卡和路由已恢复。')
+      await refresh()
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新 TUN 模式失败') }
+    finally { setBusy(false) }
+  }
+
+  async function toggleAutoLaunch() {
+    if (!autoLaunch?.supported || !window.qingSuoWindow) return
+    const enabled = !autoLaunch.enabled
+    setBusy(true); setMessage('')
+    try {
+      const result = await window.qingSuoWindow.setAutoLaunchEnabled(enabled)
+      setAutoLaunch(result)
+      setMessage(enabled ? '已开启开机自启动，登录 Windows 后将最小化到托盘。' : '已关闭开机自启动。')
+    } catch (error) { setMessage(error instanceof Error ? error.message : '更新开机自启动设置失败') }
     finally { setBusy(false) }
   }
 
@@ -381,6 +495,12 @@ export default function App() {
         </div>
         <div className="topbar-spacer" />
         <div className="topbar-actions">
+          <label className="theme-picker" title="切换界面主题">
+            <span>主题</span>
+            <select value={theme} onChange={(event) => setTheme(event.target.value as ThemeName)}>
+              {themes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
           <button className="ghost" disabled={busy} onClick={() => void restartCore()}><Icon.Refresh /> 重启</button>
         </div>
         {desktopWindow && (
@@ -403,7 +523,22 @@ export default function App() {
           </div>
           <div className="sub-list">
             {subscriptions.map((sub) => (
-              <div className="sub-row" key={sub.id}>
+              <div
+                className={`sub-row ${sub.id === displayGroup?.id ? 'active' : ''}`}
+                key={sub.id}
+                role="button"
+                tabIndex={busy || !running || sub.id === displayGroup?.id ? -1 : 0}
+                aria-current={sub.id === displayGroup?.id ? 'true' : undefined}
+                aria-label={`切换到订阅分组 ${sub.name}`}
+                onClick={() => !busy && running && sub.id !== displayGroup?.id && void selectGroup(sub.id)}
+                onKeyDown={(event) => {
+                  if ((event.target as HTMLElement).closest('button')) return
+                  if ((event.key === 'Enter' || event.key === ' ') && !busy && running && sub.id !== displayGroup?.id) {
+                    event.preventDefault()
+                    void selectGroup(sub.id)
+                  }
+                }}
+              >
                 <div className="info">
                   <div className="ic"><Icon.Layers /></div>
                   <div className="meta">
@@ -412,8 +547,8 @@ export default function App() {
                   </div>
                 </div>
                 <div className="btns">
-                  <button className="ghost sm" disabled={busy} onClick={() => void refreshSubscription(sub.id)}><Icon.Refresh /></button>
-                  <button className="danger sm" disabled={busy} onClick={() => void deleteSubscription(sub.id)}><Icon.Trash /></button>
+                  <button className="ghost sm" disabled={busy} onClick={(event) => { event.stopPropagation(); void refreshSubscription(sub.id) }}><Icon.Refresh /></button>
+                  <button className="danger sm" disabled={busy} onClick={(event) => { event.stopPropagation(); void deleteSubscription(sub.id) }}><Icon.Trash /></button>
                 </div>
               </div>
             ))}
@@ -426,7 +561,36 @@ export default function App() {
             <Icon.Layers /> 管理路由规则
             <span className="route-rule-count">{whitelist.length} 条自定义</span>
           </button>
-          <div className="route-sidebar-hint">大陆规则自动直连；未匹配的流量默认走代理。</div>
+          <div className="route-sidebar-hint">{routingMode.globalProxy ? '全局代理已开启：所有接入流量都走代理。' : '大陆规则自动直连；未匹配的流量默认走代理。'}</div>
+          <div className="sys-proxy" style={{ marginTop: '8px' }}>
+            <div>
+              <div className="nm">全局代理</div>
+              <div className="st">{routingMode.globalProxy ? '已开启 · 全部流量走代理' : '规则分流 · 大陆直连'}</div>
+            </div>
+            <div
+              className={routingMode.globalProxy ? 'toggle on' : 'toggle'}
+              role="switch"
+              aria-checked={routingMode.globalProxy}
+              aria-label="全局代理"
+              onClick={() => !busy && hasSubscriptions && void toggleGlobalProxy()}
+            />
+          </div>
+			{tunMode?.supported && (
+				<div className="sys-proxy" style={{ marginTop: '8px' }}>
+					<div>
+						<div className="nm">TUN 模式</div>
+						<div className="st">{tunMode.enabled ? '已开启 · 接管应用直连流量' : tunMode.configured ? '已配置 · 需管理员权限才能生效' : tunMode.elevated ? '已关闭 · 可接管 Navicat 等应用' : '需以管理员身份运行'}</div>
+					</div>
+					<div
+						className={tunMode.configured ? 'toggle on' : 'toggle'}
+						role="switch"
+						aria-checked={tunMode.configured}
+						aria-label="TUN 模式"
+						title={tunMode.elevated ? '创建虚拟网卡并接管应用直连流量' : '请右键 QingSuo.exe，选择“以管理员身份运行”后再开启'}
+						onClick={() => !busy && hasSubscriptions && (tunMode.configured || tunMode.elevated) && void toggleTunMode()}
+					/>
+				</div>
+			)}
           {systemProxy?.supported && (
             <div className="sys-proxy" style={{ marginTop: '8px' }}>
               <div>
@@ -434,6 +598,21 @@ export default function App() {
                 <div className="st">{systemProxy.enabled ? '已开启' : '已关闭'}</div>
               </div>
               <div className={systemProxy.enabled ? 'toggle on' : 'toggle'} role="button" onClick={() => !busy && (running || systemProxy.enabled) && void toggleSystemProxy()} />
+            </div>
+          )}
+          {autoLaunch?.supported && (
+            <div className="sys-proxy" style={{ marginTop: '8px' }}>
+              <div>
+                <div className="nm">开机自启动</div>
+                <div className="st">{autoLaunch.enabled ? '已开启 · 启动后驻留托盘' : '已关闭'}</div>
+              </div>
+              <div
+                className={autoLaunch.enabled ? 'toggle on' : 'toggle'}
+                role="switch"
+                aria-checked={autoLaunch.enabled}
+                aria-label="开机自启动"
+                onClick={() => !busy && void toggleAutoLaunch()}
+              />
             </div>
           )}
         </div>
@@ -444,7 +623,7 @@ export default function App() {
             <header className="route-modal-head">
               <div>
                 <h2>管理路由规则</h2>
-                <p>自定义白名单匹配域名和子域名并直连；未匹配流量默认走代理。</p>
+                <p>{routingMode.globalProxy ? '全局代理已开启：内置和自定义直连规则暂不生效。' : '自定义白名单匹配域名和子域名并直连；未匹配流量默认走代理。'}</p>
               </div>
               <button className="ghost sm" onClick={() => { setRouteRulesModalOpen(false); setEditingDomain(null) }}><Icon.X /></button>
             </header>
@@ -473,7 +652,7 @@ export default function App() {
                         ) : <span className="route-rule-value" title={rule.value}>{rule.value}</span>}
                       </div>
                       <div className="route-rule-meta">
-                        <span>域名及子域名</span><span className="route-direct">直连</span>
+                        <span>域名及子域名</span><span className={rule.outbound === '直连' ? 'route-direct' : 'route-disabled'}>{rule.outbound}</span>
                         {editingDomain === rule.value ? <><button className="route-edit" disabled={busy || !editValue.trim()} onClick={() => void editWhitelist(rule.value, editValue.trim())}>保存</button><button className="route-edit" disabled={busy} onClick={() => setEditingDomain(null)}>取消</button></> : <><button className="route-edit" disabled={busy} onClick={() => { setEditingDomain(rule.value); setEditValue(rule.value) }}>编辑</button><button className="whitelist-delete" disabled={busy} onClick={() => void deleteWhitelist(rule.value)} title={`删除 ${rule.value}`}><Icon.Trash /></button></>}
                       </div>
                     </div>
@@ -495,15 +674,15 @@ export default function App() {
           <div className="nodes-head-row">
             <div className="nodes-title">
               节点选择
-              {displayGroup && <span className="muted">{displayGroup.mode === 'auto' ? '自动选优' : '手动'} · {displayGroup.active || '--'}</span>}
+              {displayGroup && <span className="muted">{displayGroup.auto ? '自动选优' : '已暂停自动'} · {displayGroup.active || '--'}</span>}
             </div>
             <div className="actions">
               <div className="switch-inline auto-select-switch">
                 <span>自动选择</span>
                 <div
-                  className={`toggle ${displayGroup?.mode === 'auto' ? 'on' : ''}`}
+                  className={`toggle ${autoSwitch.autoSelection ? 'on' : ''}`}
                   role="switch"
-                  aria-checked={displayGroup?.mode === 'auto'}
+                  aria-checked={autoSwitch.autoSelection}
                   aria-label="自动选择节点"
                   onClick={() => !busy && running && void toggleAutoSelection()}
                 />
@@ -518,6 +697,12 @@ export default function App() {
                   onClick={() => !busy && running && void toggleFailoverOnly()}
                 />
               </div>
+              <label className="switch-interval" title="自动选优会按此周期重新测速并挑选节点">
+                <span>自动切换</span>
+                <select value={autoSwitch.switchInterval} disabled={busy} onChange={(event) => void changeSwitchInterval(event.target.value as SwitchInterval)}>
+                  {switchIntervals.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
               <div className="switch-inline auto-select-switch" title="测速失败后从订阅分组删除节点">
                 <span>失败自动删</span>
                 <div
@@ -533,13 +718,6 @@ export default function App() {
           </div>
           {hasSubscriptions && nodesState && (
             <>
-              <div className="group-tabs">
-                {nodesState.groups.map((g) => (
-                  <button key={g.id} className={g.id === (displayGroup?.id ?? '') ? 'gtab active' : 'gtab'} disabled={busy || !running || g.id === displayGroup?.id} onClick={() => void selectGroup(g.id)}>
-                    {g.name}<span className="cnt">({g.nodes.length})</span>
-                  </button>
-                ))}
-              </div>
               <div className="filter-bar">
                 <label>测速项目</label>
                 <select value={testService} onChange={(e) => setTestService(e.target.value as TestService)}>
@@ -576,7 +754,7 @@ export default function App() {
                   </span>
                   <span className="btns">
                     <button className="ghost sm" disabled={busy || !running} onClick={() => void testNodes(node.tag)} title="按当前测速项目测试">测速</button>
-                    <button className="sm" disabled={busy || !running} onClick={() => displayGroup && void chooseNode(displayGroup.id, 'manual', node.tag)}>使用</button>
+                    <button className="sm" disabled={busy || !running} onClick={() => displayGroup && void chooseNode(displayGroup.id, 'node', node.tag)} title="立即使用此节点，仍保持自动选择">使用</button>
                   </span>
                 </div>
               )
@@ -609,7 +787,7 @@ export default function App() {
         <div className="bottom-body">
           {advancedTab === 'config' ? (
             hasSubscriptions
-              ? <div className="hint"><Icon.FileCode /> 配置由订阅分组自动管理 · <code>proxy</code> 选择器 + <code>urltest</code> · 国内走白名单直连</div>
+              ? <div className="hint"><Icon.FileCode /> 配置由订阅分组自动管理 · <code>proxy</code> 选择器 + <code>urltest</code> · {tunMode?.enabled ? 'TUN 已开启：应用直连流量也会接入' : ''}{tunMode?.enabled && ' · '}{routingMode.globalProxy ? '全局代理：全部流量走当前节点' : '国内走白名单直连'}</div>
               : <textarea value={config} disabled={running} onChange={(e) => setConfig(e.target.value)} spellCheck="false" />
           ) : (
             <pre ref={logRef}>{logs || '尚无日志。'}</pre>

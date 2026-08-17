@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell, Tray } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, Tray } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs/promises");
 const path = require("path");
@@ -8,14 +8,18 @@ const settingsFiles = [
   "config.json",
   "subscriptions.json",
   "whitelist.json",
+  "routing.json",
+	"tun.json",
   "auto-switch.json",
   "failed-node-cleanup.json"
 ];
 const initializationMarker = ".qingsuo-initialized.json";
+const autoLaunchArgument = "--qingsuo-open-at-login";
 let mainWindow;
 let backend;
 let tray;
 let isQuitting = false;
+const launchedAtLogin = process.argv.includes(autoLaunchArgument);
 
 // Used only by packaging tests; normal users keep settings in AppData.
 if (process.env.QINGSUO_USER_DATA_DIR) {
@@ -40,6 +44,30 @@ function portableDataPath() {
   // The desktop release keeps its user-owned settings beside the executable,
   // so copying the whole application folder also carries its configuration.
   return process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath);
+}
+
+function supportsAutoLaunch() {
+  // Do not register the Electron development binary as a Windows startup item.
+  return process.platform === "win32" && app.isPackaged;
+}
+
+function getAutoLaunchSettings() {
+  if (!supportsAutoLaunch()) return { supported: false, enabled: false };
+  const settings = app.getLoginItemSettings({
+    path: process.execPath,
+    args: [autoLaunchArgument]
+  });
+  return { supported: true, enabled: settings.openAtLogin };
+}
+
+function setAutoLaunchEnabled(enabled) {
+  if (!supportsAutoLaunch()) return { supported: false, enabled: false };
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    path: process.execPath,
+    args: [autoLaunchArgument]
+  });
+  return getAutoLaunchSettings();
 }
 
 async function pathExists(target) {
@@ -153,6 +181,12 @@ async function startBackend() {
   }
 }
 
+async function clearRendererCache() {
+  // Local web assets are replaceable between desktop releases. Clearing the
+  // HTTP cache before loading prevents a stale renderer from showing old UI.
+  await session.defaultSession.clearCache();
+}
+
 async function stopBackend() {
   if (!backend || backend.killed) return;
   try {
@@ -177,7 +211,7 @@ function showMainWindow() {
 }
 
 function createTray() {
-  tray = new Tray(resourcePath("qingsuo-sixfold.ico"));
+  tray = new Tray(resourcePath("qingsuo-shield.ico"));
   tray.setToolTip("青梭 QingSuo");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "显示青梭", click: showMainWindow },
@@ -195,7 +229,7 @@ function createWindow() {
     minHeight: 660,
     show: false,
     frame: false,
-    icon: resourcePath("qingsuo-sixfold.ico"),
+    icon: resourcePath("qingsuo-shield.ico"),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -213,7 +247,10 @@ function createWindow() {
     event.preventDefault();
     mainWindow.hide();
   });
-  mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.once("ready-to-show", () => {
+    // A login launch should be ready in the tray without interrupting startup.
+    if (!launchedAtLogin) mainWindow.show();
+  });
   mainWindow.loadURL(`http://127.0.0.1:${apiPort}/`);
 }
 
@@ -224,10 +261,16 @@ ipcMain.handle("window:toggle-maximize", () => {
   else mainWindow.maximize();
 });
 ipcMain.handle("window:hide", () => mainWindow?.hide());
+ipcMain.handle("auto-launch:get", () => getAutoLaunchSettings());
+ipcMain.handle("auto-launch:set", (_event, enabled) => {
+  if (typeof enabled !== "boolean") throw new TypeError("enabled must be a boolean");
+  return setAutoLaunchEnabled(enabled);
+});
 
 app.whenReady().then(async () => {
   app.setAppUserModelId("com.qingsuo.desktop.sixfold");
   try {
+    await clearRendererCache();
     await startBackend();
     createWindow();
     createTray();

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,8 @@ func newTestApp(t *testing.T) *app {
 		binary:        filepath.Join(dir, "missing-sing-box.exe"),
 		subscriptions: filepath.Join(dir, "subscriptions.json"),
 		whitelist:     filepath.Join(dir, "whitelist.json"),
+		routingMode:   filepath.Join(dir, "routing.json"),
+		tunMode:       filepath.Join(dir, "tun.json"),
 		autoSwitch:    filepath.Join(dir, "auto-switch.json"),
 		nodeCleanup:   filepath.Join(dir, "failed-node-cleanup.json"),
 		delays:        make(map[string]serviceDelays),
@@ -32,6 +35,12 @@ func newTestApp(t *testing.T) *app {
 	}
 	if err := a.ensureWhitelist(); err != nil {
 		t.Fatalf("ensureWhitelist: %v", err)
+	}
+	if err := a.ensureRoutingModeSettings(); err != nil {
+		t.Fatalf("ensure routing mode settings: %v", err)
+	}
+	if err := a.ensureTunModeSettings(); err != nil {
+		t.Fatalf("ensure TUN mode settings: %v", err)
 	}
 	if err := a.ensureAutoSwitchSettings(); err != nil {
 		t.Fatalf("ensure auto-switch settings: %v", err)
@@ -214,6 +223,26 @@ func TestBuildSubscriptionConfigCustomWhitelist(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSubscriptionConfigGlobalProxyHasNoDirectRoutes(t *testing.T) {
+	config, err := buildSubscriptionConfigWithSettings([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{
+			{Tag: "g1-01", Name: "Test node", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}},
+		}},
+	}, []string{"example.com"}, autoSwitchSettings{AutoSelection: true}, true, false)
+	if err != nil {
+		t.Fatalf("build global config: %v", err)
+	}
+	body := string(config)
+	for _, excluded := range []string{`"type": "direct"`, `"rule_set"`, `"domain_suffix"`, `"geosite-cn"`, `"geoip-cn"`, `"ip_is_private"`} {
+		if strings.Contains(body, excluded) {
+			t.Fatalf("global config must not contain direct routing token %q: %s", excluded, config)
+		}
+	}
+	if !strings.Contains(body, `"final": "proxy"`) {
+		t.Fatalf("global config must still route to proxy: %s", config)
+	}
+}
 func TestBuildSubscriptionConfigMultipleGroups(t *testing.T) {
 	config, err := buildSubscriptionConfig([]subscriptionGroup{
 		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Name: "a", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}},
@@ -313,9 +342,38 @@ func TestServiceDelayMergePreservesOtherResults(t *testing.T) {
 	}
 }
 
+func TestNodeSelectionKeepsAutomaticMode(t *testing.T) {
+	a := newTestApp(t)
+	groups := []subscriptionGroup{{
+		ID: "g1",
+		Nodes: []vlessNode{
+			{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}},
+			{Tag: "g1-02", Outbound: map[string]any{"type": "vless", "tag": "g1-02"}},
+		},
+	}}
+	if err := a.writeSubscriptions(groups); err != nil {
+		t.Fatal(err)
+	}
+	settings := autoSwitchSettings{AutoSelection: true, FailoverOnly: true, Pinned: map[string]string{"g1": "g1-01"}}
+	if err := a.writeAutoSwitchSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+
+	// The core is absent in this unit test, so validate the persistence rule
+	// that handleSelection applies after a successful live selector change.
+	settings.Pinned["g1"] = "g1-02"
+	if err := a.writeAutoSwitchSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.readAutoSwitchSettings()
+	if err != nil || !got.AutoSelection || got.Pinned["g1"] != "g1-02" {
+		t.Fatalf("node selection did not stay automatic: %#v, %v", got, err)
+	}
+}
+
 func TestRouteRulesIncludeBuiltInsAndCustomWhitelist(t *testing.T) {
 	a := newTestApp(t)
-	rules := a.routeRules([]string{"example.com"})
+	rules := a.routeRules([]string{"example.com"}, false)
 	if len(rules) != 6 {
 		t.Fatalf("expected 6 route rules, got %#v", rules)
 	}
@@ -325,6 +383,83 @@ func TestRouteRulesIncludeBuiltInsAndCustomWhitelist(t *testing.T) {
 	}
 	if rules[len(rules)-1].Outbound != "代理" {
 		t.Fatalf("final route rule should proxy: %#v", rules[len(rules)-1])
+	}
+}
+
+func TestGlobalRouteRulesSuspendDirectRules(t *testing.T) {
+	a := newTestApp(t)
+	rules := a.routeRules([]string{"example.com"}, true)
+	if len(rules) != 2 || rules[0].ID != "global" || rules[0].Outbound != "代理" {
+		t.Fatalf("unexpected global rules: %#v", rules)
+	}
+	if rules[1].Value != "example.com" || rules[1].Outbound != "已停用" || !rules[1].Editable {
+		t.Fatalf("custom whitelist should be retained but suspended: %#v", rules[1])
+	}
+}
+
+func TestRoutingModeUpdatePersistsWithoutSubscriptions(t *testing.T) {
+	a := newTestApp(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/routing-mode", strings.NewReader(`{"globalProxy":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	a.handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("routing mode update status = %d: %s", response.Code, response.Body.String())
+	}
+	settings, err := a.readRoutingModeSettings()
+	if err != nil || !settings.GlobalProxy {
+		t.Fatalf("routing mode settings = %#v, %v", settings, err)
+	}
+}
+
+func TestBuildSubscriptionConfigAddsTunInbound(t *testing.T) {
+	config, err := buildSubscriptionConfigWithSettings([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}},
+	}, nil, autoSwitchSettings{AutoSelection: true}, false, true)
+	if err != nil {
+		t.Fatalf("build TUN config: %v", err)
+	}
+	body := string(config)
+	for _, expected := range []string{`"type": "tun"`, `"interface_name": "QingSuo TUN"`, `"auto_route": true`, `"strict_route": true`, `"stack": "mixed"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("TUN config missing %q: %s", expected, config)
+		}
+	}
+}
+
+func TestTunConfigurationValidatesWithBundledSingBox(t *testing.T) {
+	binary := filepath.Join("data", "bin", "sing-box.exe")
+	if _, err := os.Stat(binary); errors.Is(err, os.ErrNotExist) {
+		t.Skip("bundled sing-box binary is not available")
+	}
+	absBinary, err := filepath.Abs(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestApp(t)
+	a.binary = absBinary
+	config, err := buildSubscriptionConfigWithSettings([]subscriptionGroup{
+		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01", "server": "example.com", "server_port": 443, "uuid": "11111111-1111-1111-1111-111111111111"}}}},
+	}, nil, autoSwitchSettings{AutoSelection: true}, true, true)
+	if err != nil {
+		t.Fatalf("build global TUN config: %v", err)
+	}
+	if err := a.validateConfig(config); err != nil {
+		t.Fatalf("bundled sing-box rejected TUN config: %v", err)
+	}
+}
+
+func TestTunModeUpdateRequiresSupportAndElevation(t *testing.T) {
+	a := newTestApp(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/tun-mode", strings.NewReader(`{"enabled":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	a.handler().ServeHTTP(response, request)
+	if !tunModeSupported() && response.Code != http.StatusNotImplemented {
+		t.Fatalf("unsupported TUN request status = %d: %s", response.Code, response.Body.String())
+	}
+	if tunModeSupported() && !processElevated() && response.Code != http.StatusForbidden {
+		t.Fatalf("non-elevated TUN request status = %d: %s", response.Code, response.Body.String())
 	}
 }
 
@@ -390,9 +525,9 @@ func TestPrepareSavedSelectionConfigUsesSavedActiveGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.writeAutoSwitchSettings(autoSwitchSettings{
-		ActiveGroup: "g2",
-		Pinned:      map[string]string{"g2": "g2-01"},
-		Manual:      map[string]bool{"g2": true},
+		AutoSelection: true,
+		ActiveGroup:   "g2",
+		Pinned:        map[string]string{"g2": "g2-01"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +542,7 @@ func TestPrepareSavedSelectionConfigUsesSavedActiveGroup(t *testing.T) {
 		t.Fatalf("config did not preserve stable selector structure: %s", contents)
 	}
 	settings, err := a.readAutoSwitchSettings()
-	if err != nil || settings.ActiveGroup != "g2" || !settings.Manual["g2"] || settings.Pinned["g2"] != "g2-01" {
+	if err != nil || !settings.AutoSelection || settings.ActiveGroup != "g2" || settings.Pinned["g2"] != "g2-01" {
 		t.Fatalf("saved selection changed unexpectedly: %#v, %v", settings, err)
 	}
 }
@@ -431,7 +566,7 @@ func TestRemoveFailedNodesKeepsOneNode(t *testing.T) {
 func TestBuildSubscriptionConfigFailoverOnlyUsesHighTolerance(t *testing.T) {
 	config, err := buildSubscriptionConfigWithSettings([]subscriptionGroup{
 		{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}},
-	}, nil, autoSwitchSettings{FailoverOnly: true, Pinned: map[string]string{"g1": "g1-01"}})
+	}, nil, autoSwitchSettings{FailoverOnly: true, Pinned: map[string]string{"g1": "g1-01"}}, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,5 +575,53 @@ func TestBuildSubscriptionConfigFailoverOnlyUsesHighTolerance(t *testing.T) {
 	}
 	if !strings.Contains(string(config), `"default": "g1-01"`) {
 		t.Fatalf("failover-only selector did not pin node: %s", config)
+	}
+}
+
+func TestNormalizeAutoSwitchSettingsDefaultsInterval(t *testing.T) {
+	settings := autoSwitchSettings{}
+	normalizeAutoSwitchSettings(&settings)
+	if settings.SwitchInterval != "5m" {
+		t.Fatalf("expected default interval 5m, got %q", settings.SwitchInterval)
+	}
+	settings.SwitchInterval = "invalid"
+	normalizeAutoSwitchSettings(&settings)
+	if settings.SwitchInterval != "5m" {
+		t.Fatalf("expected invalid interval to normalize to 5m, got %q", settings.SwitchInterval)
+	}
+}
+
+func TestBuildSubscriptionConfigUsesSwitchInterval(t *testing.T) {
+	config, err := buildSubscriptionConfigWithSettings([]subscriptionGroup{{ID: "g1", Nodes: []vlessNode{{Tag: "g1-01", Outbound: map[string]any{"type": "vless", "tag": "g1-01"}}}}}, nil, autoSwitchSettings{AutoSelection: true, SwitchInterval: "30s"}, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(config), `"interval": "30s"`) {
+		t.Fatalf("switch interval missing from config: %s", config)
+	}
+}
+
+func TestAutoSwitchIntervalAPIUpdatesAndRejectsInvalidValues(t *testing.T) {
+	a := newTestApp(t)
+	handler := a.handler()
+
+	update := httptest.NewRequest(http.MethodPost, "/api/auto-switch", strings.NewReader(`{"switchInterval":"3m"}`))
+	update.Header.Set("Content-Type", "application/json")
+	updateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(updateResponse, update)
+	if updateResponse.Code != http.StatusOK {
+		t.Fatalf("update interval status = %d, body = %s", updateResponse.Code, updateResponse.Body.String())
+	}
+	settings, err := a.readAutoSwitchSettings()
+	if err != nil || settings.SwitchInterval != "3m" || !settings.AutoSelection {
+		t.Fatalf("interval update was not persisted: %#v, %v", settings, err)
+	}
+
+	invalid := httptest.NewRequest(http.MethodPost, "/api/auto-switch", strings.NewReader(`{"switchInterval":"2h"}`))
+	invalid.Header.Set("Content-Type", "application/json")
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalid)
+	if invalidResponse.Code != http.StatusBadRequest {
+		t.Fatalf("invalid interval status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
 }

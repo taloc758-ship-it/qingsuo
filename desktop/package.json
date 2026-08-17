@@ -33,13 +33,13 @@
         "to": "web"
       },
       {
-        "from": "../assets/qingsuo-sixfold.ico",
-        "to": "qingsuo-sixfold.ico"
+        "from": "../assets/icons/qingsuo-shield.ico",
+        "to": "qingsuo-shield.ico"
       }
     ],
     "asar": true,
     "win": {
-      "icon": "../assets/qingsuo-sixfold.ico",
+      "icon": "../assets/icons/qingsuo-shield.ico",
       "executableName": "QingSuo",
       "requestedExecutionLevel": "asInvoker",
       "target": [

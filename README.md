@@ -1,8 +1,12 @@
 # QingSuo
 
 Windows desktop proxy console built around sing-box. It supports subscription groups,
-node latency tests, automatic failover, route rules, Windows system-proxy control, and
-a tray-resident desktop experience.
+node latency tests, automatic failover, split/global proxy routing, Windows system-proxy
+and TUN control, optional Windows login auto-start, and a tray-resident desktop experience.
+The sidebar switches subscription groups directly (there is no duplicate group tab strip),
+automatic selection supports configurable 30-second to 30-minute intervals, and the UI
+includes four themes. Five taskbar/tray icon variants are kept under `assets\icons`; the
+Shield variant is selected for packaging because it remains legible at 16px.
 
 ## Stack
 

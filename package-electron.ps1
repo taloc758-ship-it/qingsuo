@@ -31,11 +31,11 @@ if (-not $releaseDirectory.StartsWith($projectRootWithSeparator, [System.StringC
 
 $stagingDirectory = Join-Path $projectRoot ".electron-staging"
 $frontendDistDirectory = Join-Path $frontendDirectory "dist"
-$iconPath = Join-Path $projectRoot "assets\qingsuo-sixfold.ico"
+$iconPath = Join-Path $projectRoot "assets\icons\qingsuo-shield.ico"
 $goCacheDirectory = Join-Path $projectRoot ".package-go-cache"
 
 if (-not (Test-Path -LiteralPath $iconPath)) {
-    & (Join-Path $projectRoot "tools\New-QingSuoIcon.ps1") -OutputPath $iconPath
+    & (Join-Path $projectRoot "tools\New-QingSuoIconVariants.ps1") -OutputDirectory (Split-Path -Parent $iconPath)
     if ($LASTEXITCODE -ne 0) { throw "Application icon generation failed." }
 }
 
@@ -76,7 +76,7 @@ New-Item -ItemType Directory -Force -Path $stagedDataDirectory | Out-Null
 Copy-Item -Path (Join-Path $backendDirectory "data\*") -Destination $stagedDataDirectory -Recurse -Force
 Get-ChildItem -LiteralPath $stagedDataDirectory -Recurse -File -Filter "*.log" | Remove-Item -Force
 
-foreach ($requiredFile in "config.json", "subscriptions.json", "whitelist.json", "auto-switch.json", "failed-node-cleanup.json") {
+foreach ($requiredFile in "config.json", "subscriptions.json", "whitelist.json", "routing.json", "tun.json", "auto-switch.json", "failed-node-cleanup.json") {
     $sourceFile = Join-Path $backendDirectory "data\$requiredFile"
     $stagedFile = Join-Path $stagedDataDirectory $requiredFile
     if (-not (Test-Path -LiteralPath $sourceFile) -or -not (Test-Path -LiteralPath $stagedFile)) {
@@ -111,7 +111,7 @@ if (-not (Test-Path -LiteralPath $unpackedDirectory)) {
 $runtimeDataDirectory = Join-Path $unpackedDirectory "data"
 New-Item -ItemType Directory -Force -Path $runtimeDataDirectory | Out-Null
 Copy-Item -Path (Join-Path $stagedDataDirectory "*") -Destination $runtimeDataDirectory -Recurse -Force
-foreach ($requiredFile in "config.json", "subscriptions.json", "whitelist.json", "auto-switch.json", "failed-node-cleanup.json") {
+foreach ($requiredFile in "config.json", "subscriptions.json", "whitelist.json", "routing.json", "tun.json", "auto-switch.json", "failed-node-cleanup.json") {
     $sourceFile = Join-Path $backendDirectory "data\$requiredFile"
     $runtimeFile = Join-Path $runtimeDataDirectory $requiredFile
     if ((Get-FileHash -LiteralPath $sourceFile).Hash -ne (Get-FileHash -LiteralPath $runtimeFile).Hash) {
@@ -129,7 +129,10 @@ Move-Item -LiteralPath $unpackedDirectory -Destination $desktopAppDirectory
 1. 双击 QingSuo.exe。程序会启动代理核心并打开控制台。
 2. 关闭窗口会隐藏到右下角的系统托盘，代理继续运行；左键托盘图标可恢复窗口。
 3. 需要完全退出时，右键托盘图标并选择“退出”。退出会停止代理核心，并关闭由青梭开启的 Windows 系统代理。
-4. 界面中的“重启”只重启代理核心、重新加载配置，不会修改系统代理开关。
+4. “全局代理”开启后，所有接入青梭的流量都会走当前代理节点；关闭后恢复大陆和自定义白名单直连。
+5. TUN 模式可接管 Navicat 等不遵循 Windows 系统代理的应用流量。开启 TUN 前，请右键 QingSuo.exe 并选择“以管理员身份运行”。
+6. 界面中的“重启”只重启代理核心、重新加载配置，不会修改系统代理开关。
+7. 可在“路由规则”区域打开“开机自启动”；Windows 登录后，青梭会启动并驻留托盘。
 
 数据与迁移
 ----------

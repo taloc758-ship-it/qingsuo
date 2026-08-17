@@ -4,5 +4,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("qingSuoWindow", {
   minimize: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
-  hide: () => ipcRenderer.invoke("window:hide")
+  hide: () => ipcRenderer.invoke("window:hide"),
+  getAutoLaunchSettings: () => ipcRenderer.invoke("auto-launch:get"),
+  setAutoLaunchEnabled: (enabled) => ipcRenderer.invoke("auto-launch:set", enabled)
 });

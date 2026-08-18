@@ -39,6 +39,23 @@ if (-not (Test-Path -LiteralPath $iconPath)) {
     if ($LASTEXITCODE -ne 0) { throw "Application icon generation failed." }
 }
 
+# The portable app keeps sing-box beside the executable. Stop every running
+# instance before replacing the output directory so Windows does not retain a
+# file lock on the previous package.
+$runningSingBox = @(Get-Process -Name "sing-box" -ErrorAction SilentlyContinue)
+if ($runningSingBox.Count -gt 0) {
+    $processIds = $runningSingBox.Id -join ", "
+    Write-Host "Stopping running sing-box process(es): $processIds"
+    $runningSingBox | Stop-Process -Force -ErrorAction Stop
+    foreach ($process in $runningSingBox) {
+        try {
+            Wait-Process -Id $process.Id -Timeout 10 -ErrorAction Stop
+        } catch {
+            throw "Could not stop sing-box.exe (PID $($process.Id)). Close the process and run the package script again."
+        }
+    }
+}
+
 if (Test-Path -LiteralPath $stagingDirectory) { Remove-Item -LiteralPath $stagingDirectory -Recurse -Force }
 if (Test-Path -LiteralPath $releaseDirectory) { Remove-Item -LiteralPath $releaseDirectory -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stagingDirectory | Out-Null

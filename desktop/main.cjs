@@ -15,10 +15,13 @@ const settingsFiles = [
 ];
 const initializationMarker = ".qingsuo-initialized.json";
 const autoLaunchArgument = "--qingsuo-open-at-login";
+const iconVariants = ["orbit", "shield", "prism", "pulse", "knot"];
+const defaultIconVariant = "shield";
 let mainWindow;
 let backend;
 let tray;
 let isQuitting = false;
+let selectedIconVariant = defaultIconVariant;
 const launchedAtLogin = process.argv.includes(autoLaunchArgument);
 
 // Used only by packaging tests; normal users keep settings in AppData.
@@ -38,6 +41,12 @@ app.on("second-instance", () => {
 function resourcePath(...parts) {
   if (app.isPackaged) return path.join(process.resourcesPath, ...parts);
   return path.join(__dirname, "..", ".electron-staging", ...parts);
+}
+
+function iconResourcePath(variant = selectedIconVariant) {
+  const filename = `qingsuo-${variant}.ico`;
+  if (app.isPackaged) return path.join(process.resourcesPath, "icons", filename);
+  return path.join(__dirname, "..", "assets", "icons", filename);
 }
 
 function portableDataPath() {
@@ -126,6 +135,41 @@ async function ensureDataDirectory() {
   return destination;
 }
 
+function desktopSettingsPath() {
+  return path.join(portableDataPath(), "data", "desktop-settings.json");
+}
+
+async function loadDesktopSettings() {
+  try {
+    const contents = await fs.readFile(desktopSettingsPath(), "utf8");
+    const settings = JSON.parse(contents);
+    if (iconVariants.includes(settings.iconVariant)) {
+      selectedIconVariant = settings.iconVariant;
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") console.warn("Could not read desktop settings:", error);
+  }
+}
+
+async function setIconVariant(variant) {
+  if (!iconVariants.includes(variant)) {
+    throw new TypeError("unknown icon variant");
+  }
+  const iconPath = iconResourcePath(variant);
+  if (!(await pathExists(iconPath))) {
+    throw new Error(`Selected icon is missing: ${iconPath}`);
+  }
+  await fs.writeFile(desktopSettingsPath(), JSON.stringify({ iconVariant: variant }, null, 2));
+  selectedIconVariant = variant;
+  if (mainWindow) mainWindow.setIcon(iconPath);
+  if (tray) tray.setImage(iconPath);
+  return { selected: selectedIconVariant, variants: iconVariants };
+}
+
+function getIconSettings() {
+  return { selected: selectedIconVariant, variants: iconVariants };
+}
+
 async function waitForBackend() {
   const endpoint = `http://127.0.0.1:${apiPort}/api/status`;
   const deadline = Date.now() + 15000;
@@ -211,7 +255,7 @@ function showMainWindow() {
 }
 
 function createTray() {
-  tray = new Tray(resourcePath("qingsuo-shield.ico"));
+  tray = new Tray(iconResourcePath());
   tray.setToolTip("青梭 QingSuo");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "显示青梭", click: showMainWindow },
@@ -229,7 +273,7 @@ function createWindow() {
     minHeight: 660,
     show: false,
     frame: false,
-    icon: resourcePath("qingsuo-shield.ico"),
+    icon: iconResourcePath(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -266,12 +310,15 @@ ipcMain.handle("auto-launch:set", (_event, enabled) => {
   if (typeof enabled !== "boolean") throw new TypeError("enabled must be a boolean");
   return setAutoLaunchEnabled(enabled);
 });
+ipcMain.handle("app-icon:get", () => getIconSettings());
+ipcMain.handle("app-icon:set", (_event, variant) => setIconVariant(variant));
 
 app.whenReady().then(async () => {
   app.setAppUserModelId("com.qingsuo.desktop.sixfold");
   try {
     await clearRendererCache();
     await startBackend();
+    await loadDesktopSettings();
     createWindow();
     createTray();
   } catch (error) {

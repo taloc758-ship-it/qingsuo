@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import orbitPreview from '../../assets/icons/qingsuo-orbit.png'
+import shieldPreview from '../../assets/icons/qingsuo-shield.png'
+import prismPreview from '../../assets/icons/qingsuo-prism.png'
+import pulsePreview from '../../assets/icons/qingsuo-pulse.png'
+import knotPreview from '../../assets/icons/qingsuo-knot.png'
 
 type Status = {
   running: boolean
@@ -89,6 +94,7 @@ type AutoSwitchSettings = {
 
 type SwitchInterval = '30s' | '1m' | '3m' | '5m' | '10m' | '30m'
 type ThemeName = 'carbon' | 'ocean' | 'paper' | 'contrast'
+type IconVariant = AppIconSettings['selected']
 
 const themes: Array<{ value: ThemeName, label: string }> = [
   { value: 'carbon', label: '碳黑绿' },
@@ -105,6 +111,22 @@ const switchIntervals: Array<{ value: SwitchInterval, label: string }> = [
   { value: '10m', label: '10 分钟' },
   { value: '30m', label: '30 分钟' },
 ]
+
+const iconVariants: Array<{ value: IconVariant, label: string, description: string }> = [
+  { value: 'orbit', label: '轨道', description: '环绕连接' },
+  { value: 'shield', label: '盾牌', description: '安全守护' },
+  { value: 'prism', label: '棱镜', description: '多彩折射' },
+  { value: 'pulse', label: '脉冲', description: '网络跃动' },
+  { value: 'knot', label: '环结', description: '稳定连接' },
+]
+
+const iconPreviewSources: Record<IconVariant, string> = {
+  orbit: orbitPreview,
+  shield: shieldPreview,
+  prism: prismPreview,
+  pulse: pulsePreview,
+  knot: knotPreview,
+}
 
 type FailedNodeCleanupSettings = {
   removeFailed: boolean
@@ -161,6 +183,7 @@ export default function App() {
   const [routingMode, setRoutingMode] = useState<RoutingMode>({ globalProxy: false })
 	const [tunMode, setTunMode] = useState<TunMode | null>(null)
   const [autoLaunch, setAutoLaunch] = useState<AutoLaunchSettings | null>(null)
+  const [iconVariant, setIconVariant] = useState<IconVariant>('shield')
   const [config, setConfig] = useState('')
   const [logs, setLogs] = useState('')
   const [message, setMessage] = useState('')
@@ -183,6 +206,18 @@ export default function App() {
   })
   const [failedNodeCleanup, setFailedNodeCleanup] = useState<FailedNodeCleanupSettings>({ removeFailed: false })
   const logRef = useRef<HTMLPreElement>(null)
+  const toastTimerRef = useRef<number | null>(null)
+
+  const notify = useCallback((nextMessage: string) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+    setMessage(nextMessage)
+    if (nextMessage) {
+      toastTimerRef.current = window.setTimeout(() => {
+        setMessage('')
+        toastTimerRef.current = null
+      }, 4200)
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     try {
@@ -217,7 +252,7 @@ export default function App() {
         setNodesState(null)
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '无法连接到本地 Agent')
+      notify(error instanceof Error ? error.message : '无法连接到本地 Agent')
     }
   }, [])
 
@@ -232,9 +267,22 @@ export default function App() {
     let active = true
     void window.qingSuoWindow?.getAutoLaunchSettings()
       .then((settings) => { if (active) setAutoLaunch(settings) })
-      .catch(() => { if (active) setMessage('无法读取开机自启动设置。') })
+      .catch(() => { if (active) notify('无法读取开机自启动设置。') })
     return () => { active = false }
-  }, [desktopWindow])
+  }, [desktopWindow, notify])
+
+  useEffect(() => {
+    if (!desktopWindow) return
+    let active = true
+    void window.qingSuoWindow?.getIconSettings()
+      .then((settings) => { if (active) setIconVariant(settings.selected) })
+      .catch(() => { if (active) notify('无法读取图标设置。') })
+    return () => { active = false }
+  }, [desktopWindow, notify])
+
+  useEffect(() => () => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+  }, [])
 
   useEffect(() => {
     if (autoScroll && advancedTab === 'logs' && logRef.current) {
@@ -248,203 +296,215 @@ export default function App() {
   }, [theme])
 
   async function restartCore() {
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       await request<Status>('/api/restart', { method: 'POST' })
-      setMessage('代理核心已重启，系统代理设置保持不变。')
+      notify('代理核心已重启，系统代理设置保持不变。')
       await refresh()
     }
-    catch (error) { setMessage(error instanceof Error ? error.message : '重启失败') }
+    catch (error) { notify(error instanceof Error ? error.message : '重启失败') }
     finally { setBusy(false) }
   }
 
   async function saveConfig() {
-    setBusy(true); setMessage('')
-    try { await request('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: config }) }); setMessage('配置已保存。'); await refresh() }
-    catch (error) { setMessage(error instanceof Error ? error.message : '保存失败') }
+    setBusy(true); notify('')
+    try { await request('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: config }) }); notify('配置已保存。'); await refresh() }
+    catch (error) { notify(error instanceof Error ? error.message : '保存失败') }
     finally { setBusy(false) }
   }
 
   async function importSubscription() {
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<SubscriptionsResponse>('/api/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: subscriptionURL }) })
-      setSubscriptions(result.groups); setSubscriptionURL(''); setMessage(`已导入订阅，当前共 ${result.groups.length} 个分组。`); await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '订阅导入失败') }
+      setSubscriptions(result.groups); setSubscriptionURL(''); notify(`已导入订阅，当前共 ${result.groups.length} 个分组。`); await refresh()
+    } catch (error) { notify(error instanceof Error ? error.message : '订阅导入失败') }
     finally { setBusy(false) }
   }
 
   async function refreshSubscription(id: string) {
-    setBusy(true); setMessage('')
-    try { const result = await request<SubscriptionsResponse>(`/api/subscriptions/${encodeURIComponent(id)}/refresh`, { method: 'POST' }); setSubscriptions(result.groups); setMessage('已刷新该订阅分组。'); await refresh() }
-    catch (error) { setMessage(error instanceof Error ? error.message : '刷新失败') }
+    setBusy(true); notify('')
+    try { const result = await request<SubscriptionsResponse>(`/api/subscriptions/${encodeURIComponent(id)}/refresh`, { method: 'POST' }); setSubscriptions(result.groups); notify('已刷新该订阅分组。'); await refresh() }
+    catch (error) { notify(error instanceof Error ? error.message : '刷新失败') }
     finally { setBusy(false) }
   }
 
   async function deleteSubscription(id: string) {
-    setBusy(true); setMessage('')
-    try { const result = await request<SubscriptionsResponse>(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' }); setSubscriptions(result.groups); setMessage('已删除该订阅分组。'); await refresh() }
-    catch (error) { setMessage(error instanceof Error ? error.message : '删除失败') }
+    setBusy(true); notify('')
+    try { const result = await request<SubscriptionsResponse>(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' }); setSubscriptions(result.groups); notify('已删除该订阅分组。'); await refresh() }
+    catch (error) { notify(error instanceof Error ? error.message : '删除失败') }
     finally { setBusy(false) }
   }
 
   async function selectGroup(id: string) {
-    setBusy(true); setMessage('')
-    try { const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: id, mode: 'auto' }) }); setNodesState(result); setMessage('已切换到该分组。') }
-    catch (error) { setMessage(error instanceof Error ? error.message : '切换分组失败') }
+    setBusy(true); notify('')
+    try { const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId: id, mode: 'auto' }) }); setNodesState(result); notify('已切换到该分组。') }
+    catch (error) { notify(error instanceof Error ? error.message : '切换分组失败') }
     finally { setBusy(false) }
   }
 
   async function chooseNode(groupId: string, mode: 'auto' | 'node', tag = '') {
-    setBusy(true); setMessage('')
-    try { const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId, mode, tag }) }); setNodesState(result); setMessage(mode === 'auto' ? '已切换到自动选优。' : '已使用此节点；自动选择状态不变。') }
-    catch (error) { setMessage(error instanceof Error ? error.message : '切换节点失败') }
+    setBusy(true); notify('')
+    try { const result = await request<NodesResponse>('/api/selection', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ groupId, mode, tag }) }); setNodesState(result); notify(mode === 'auto' ? '已切换到自动选优。' : '已使用此节点；自动选择状态不变。') }
+    catch (error) { notify(error instanceof Error ? error.message : '切换节点失败') }
     finally { setBusy(false) }
   }
 
   async function toggleAutoSelection() {
     if (!displayGroup) return
     const next = !autoSwitch.autoSelection
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<AutoSwitchSettings>('/api/auto-switch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ failoverOnly: autoSwitch.failoverOnly, autoSelection: next }),
       })
       setAutoSwitch(result)
-      setMessage(result.autoSelection ? '已开启自动选择。' : '已关闭自动选择，当前节点将保持不变。')
+      notify(result.autoSelection ? '已开启自动选择。' : '已关闭自动选择，当前节点将保持不变。')
       await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动选择失败') }
+    } catch (error) { notify(error instanceof Error ? error.message : '更新自动选择失败') }
     finally { setBusy(false) }
   }
 
   async function toggleFailoverOnly() {
     const next = !autoSwitch.failoverOnly
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<AutoSwitchSettings>('/api/auto-switch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ failoverOnly: next, autoSelection: autoSwitch.autoSelection }),
       })
       setAutoSwitch(result)
-      setMessage(result.failoverOnly ? '已启用故障才切换：当前节点可用时不会因延迟更低而切换。' : '已启用延迟优选：自动组会优先选择更低延迟节点。')
+      notify(result.failoverOnly ? '已启用故障才切换：当前节点可用时不会因延迟更低而切换。' : '已启用延迟优选：自动组会优先选择更低延迟节点。')
       await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动切换设置失败') }
+    } catch (error) { notify(error instanceof Error ? error.message : '更新自动切换设置失败') }
     finally { setBusy(false) }
   }
 
   async function changeSwitchInterval(switchInterval: SwitchInterval) {
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<AutoSwitchSettings>('/api/auto-switch', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ switchInterval }),
       })
       setAutoSwitch(result)
       const label = switchIntervals.find((item) => item.value === result.switchInterval)?.label ?? result.switchInterval
-      setMessage(`自动选优周期已设为 ${label}。`)
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新自动切换周期失败') }
+      notify(`自动选优周期已设为 ${label}。`)
+    } catch (error) { notify(error instanceof Error ? error.message : '更新自动切换周期失败') }
     finally { setBusy(false) }
   }
 
   async function toggleFailedNodeCleanup() {
     const next = !failedNodeCleanup.removeFailed
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<FailedNodeCleanupSettings>('/api/failed-node-cleanup', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeFailed: next }),
       })
       setFailedNodeCleanup(result)
-      setMessage(result.removeFailed ? '已启用：测速失败的节点会从当前订阅组删除。' : '已关闭：测速失败的节点只标记为不可用。')
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新失败节点清理设置失败') }
+      notify(result.removeFailed ? '已启用：测速失败的节点会从当前订阅组删除。' : '已关闭：测速失败的节点只标记为不可用。')
+    } catch (error) { notify(error instanceof Error ? error.message : '更新失败节点清理设置失败') }
     finally { setBusy(false) }
   }
 
   async function testNodes(tag?: string, groupId = displayGroup?.id) {
-    setBusy(true); setMessage('')
-    if (!tag && !groupId) { setMessage('请先选择一个订阅分组。'); setBusy(false); return }
+    setBusy(true); notify('')
+    if (!tag && !groupId) { notify('请先选择一个订阅分组。'); setBusy(false); return }
     const label = testService === 'all' ? 'Google、Gemini、ChatGPT' : testService === 'google' ? 'Google' : testService === 'gemini' ? 'Gemini' : 'ChatGPT'
     const endpoint = tag ? `/api/nodes/${encodeURIComponent(tag)}/test` : `/api/groups/${encodeURIComponent(groupId!)}/nodes/test`
-    try { await request(`${endpoint}?service=${testService}`, { method: 'POST' }); setMessage(tag ? `正在测试 ${label}，请稍候刷新结果。` : `正在并发测试当前分组的 ${label}，请稍候刷新结果。`); window.setTimeout(() => void refresh(), 1800) }
-    catch (error) { setMessage(error instanceof Error ? error.message : '测速失败') }
+    try { await request(`${endpoint}?service=${testService}`, { method: 'POST' }); notify(tag ? `正在测试 ${label}，请稍候刷新结果。` : `正在并发测试当前分组的 ${label}，请稍候刷新结果。`); window.setTimeout(() => void refresh(), 1800) }
+    catch (error) { notify(error instanceof Error ? error.message : '测速失败') }
     finally { setBusy(false) }
   }
 
   async function toggleSystemProxy() {
     const enabled = !systemProxy?.enabled
-    setBusy(true); setMessage('')
-    try { const result = await request<SystemProxy>('/api/system-proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }); setSystemProxy(result); setMessage(enabled ? 'Windows 系统代理已启用，浏览器流量将通过当前节点。' : 'Windows 系统代理已关闭。') }
-    catch (error) { setMessage(error instanceof Error ? error.message : '更新系统代理失败') }
+    setBusy(true); notify('')
+    try { const result = await request<SystemProxy>('/api/system-proxy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }); setSystemProxy(result); notify(enabled ? 'Windows 系统代理已启用，浏览器流量将通过当前节点。' : 'Windows 系统代理已关闭。') }
+    catch (error) { notify(error instanceof Error ? error.message : '更新系统代理失败') }
     finally { setBusy(false) }
   }
 
   async function toggleGlobalProxy() {
     const globalProxy = !routingMode.globalProxy
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<RoutingMode>('/api/routing-mode', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ globalProxy }),
       })
       setRoutingMode(result)
-      setMessage(result.globalProxy ? '已开启全局代理：所有流量均通过当前代理节点。' : '已恢复规则分流：大陆和自定义白名单直连。')
+      notify(result.globalProxy ? '已开启全局代理：所有流量均通过当前代理节点。' : '已恢复规则分流：大陆和自定义白名单直连。')
       await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新全局代理模式失败') }
+    } catch (error) { notify(error instanceof Error ? error.message : '更新全局代理模式失败') }
     finally { setBusy(false) }
   }
 
   async function toggleTunMode() {
     if (!tunMode?.supported) return
 		const enabled = !tunMode.configured
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<TunMode>('/api/tun-mode', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
       })
       setTunMode(result)
-      setMessage(result.enabled ? 'TUN 模式已开启：不遵守系统代理的软件也会接入青梭。' : 'TUN 模式已关闭，虚拟网卡和路由已恢复。')
+      notify(result.enabled ? 'TUN 模式已开启：不遵守系统代理的软件也会接入青梭。' : 'TUN 模式已关闭，虚拟网卡和路由已恢复。')
       await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新 TUN 模式失败') }
+    } catch (error) { notify(error instanceof Error ? error.message : '更新 TUN 模式失败') }
     finally { setBusy(false) }
   }
 
   async function toggleAutoLaunch() {
     if (!autoLaunch?.supported || !window.qingSuoWindow) return
     const enabled = !autoLaunch.enabled
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await window.qingSuoWindow.setAutoLaunchEnabled(enabled)
       setAutoLaunch(result)
-      setMessage(enabled ? '已开启开机自启动，登录 Windows 后将最小化到托盘。' : '已关闭开机自启动。')
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新开机自启动设置失败') }
+      notify(enabled ? '已开启开机自启动，登录 Windows 后将最小化到托盘。' : '已关闭开机自启动。')
+    } catch (error) { notify(error instanceof Error ? error.message : '更新开机自启动设置失败') }
+    finally { setBusy(false) }
+  }
+
+  async function changeIconVariant(nextIconVariant: IconVariant) {
+    if (!window.qingSuoWindow) return
+    setBusy(true); notify('')
+    try {
+      const settings = await window.qingSuoWindow.setIconVariant(nextIconVariant)
+      setIconVariant(settings.selected)
+      const label = iconVariants.find((icon) => icon.value === settings.selected)?.label ?? settings.selected
+      notify(`已切换为${label}图标，任务栏和托盘已同步更新。`)
+    } catch (error) { notify(error instanceof Error ? error.message : '切换图标失败') }
     finally { setBusy(false) }
   }
 
   async function addWhitelist() {
     const domain = whitelistDomain.trim()
     if (!domain) return
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<WhitelistResponse>('/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }) })
-      setWhitelist(result.domains); setWhitelistDomain(''); setMessage(`已添加 ${domain} 到白名单，该域名及子域名将走直连。`); await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '添加白名单失败') }
+      setWhitelist(result.domains); setWhitelistDomain(''); notify(`已添加 ${domain} 到白名单，该域名及子域名将走直连。`); await refresh()
+    } catch (error) { notify(error instanceof Error ? error.message : '添加白名单失败') }
     finally { setBusy(false) }
   }
 
   async function deleteWhitelist(domain: string) {
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<WhitelistResponse>(`/api/whitelist/${encodeURIComponent(domain)}`, { method: 'DELETE' })
-      setWhitelist(result.domains); setMessage(`已从白名单移除 ${domain}。`); await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '删除白名单失败') }
+      setWhitelist(result.domains); notify(`已从白名单移除 ${domain}。`); await refresh()
+    } catch (error) { notify(error instanceof Error ? error.message : '删除白名单失败') }
     finally { setBusy(false) }
   }
 
   async function editWhitelist(oldDomain: string, newDomain: string) {
     setEditingDomain(null)
     if (!newDomain || oldDomain === newDomain) return
-    setBusy(true); setMessage('')
+    setBusy(true); notify('')
     try {
       const result = await request<WhitelistResponse>(`/api/whitelist/${encodeURIComponent(oldDomain)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: newDomain }) })
-      setWhitelist(result.domains); setMessage(`已更新白名单：${oldDomain} → ${newDomain}`); await refresh()
-    } catch (error) { setMessage(error instanceof Error ? error.message : '更新白名单失败') }
+      setWhitelist(result.domains); notify(`已更新白名单：${oldDomain} → ${newDomain}`); await refresh()
+    } catch (error) { notify(error instanceof Error ? error.message : '更新白名单失败') }
     finally { setBusy(false) }
   }
 
@@ -480,7 +540,7 @@ export default function App() {
     <main>
       <div className="topbar">
         <div className="brand">
-          <div className="brand-mark"><Icon.Shield /></div>
+          <div className="brand-mark"><img src={iconPreviewSources[iconVariant]} alt="" /></div>
           <span className="brand-name">青梭 QingSuo</span>
         </div>
         <div className="topbar-sep" />
@@ -501,6 +561,15 @@ export default function App() {
               {themes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
           </label>
+          {desktopWindow && (
+            <label className="icon-picker" title="切换任务栏和托盘图标">
+              <img src={iconPreviewSources[iconVariant]} alt="" />
+              <span>图标</span>
+              <select value={iconVariant} disabled={busy} onChange={(event) => void changeIconVariant(event.target.value as IconVariant)}>
+                {iconVariants.map((icon) => <option key={icon.value} value={icon.value}>{icon.label} · {icon.description}</option>)}
+              </select>
+            </label>
+          )}
           <button className="ghost" disabled={busy} onClick={() => void restartCore()}><Icon.Refresh /> 重启</button>
         </div>
         {desktopWindow && (
@@ -512,7 +581,7 @@ export default function App() {
         )}
       </div>
 
-      {message && <div className="toast"><Icon.Info /> {message}</div>}
+      {message && <div className="toast" role="status"><Icon.Info /><span>{message}</span><button className="toast-close" type="button" aria-label="关闭通知" title="关闭" onClick={() => notify('')}><Icon.X /></button></div>}
 
       <aside className="sidebar">
         <div className="sb-section">

@@ -5,6 +5,11 @@ interface AutoLaunchSettings {
   enabled: boolean
 }
 
+interface AppIconSettings {
+  selected: 'orbit' | 'shield' | 'prism' | 'pulse' | 'knot'
+  variants: Array<'orbit' | 'shield' | 'prism' | 'pulse' | 'knot'>
+}
+
 interface Window {
   qingSuoWindow?: {
     minimize: () => Promise<void>
@@ -12,5 +17,7 @@ interface Window {
     hide: () => Promise<void>
     getAutoLaunchSettings: () => Promise<AutoLaunchSettings>
     setAutoLaunchEnabled: (enabled: boolean) => Promise<AutoLaunchSettings>
+    getIconSettings: () => Promise<AppIconSettings>
+    setIconVariant: (variant: AppIconSettings['selected']) => Promise<AppIconSettings>
   }
 }

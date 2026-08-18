@@ -6,5 +6,7 @@ contextBridge.exposeInMainWorld("qingSuoWindow", {
   toggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
   hide: () => ipcRenderer.invoke("window:hide"),
   getAutoLaunchSettings: () => ipcRenderer.invoke("auto-launch:get"),
-  setAutoLaunchEnabled: (enabled) => ipcRenderer.invoke("auto-launch:set", enabled)
+  setAutoLaunchEnabled: (enabled) => ipcRenderer.invoke("auto-launch:set", enabled),
+  getIconSettings: () => ipcRenderer.invoke("app-icon:get"),
+  setIconVariant: (variant) => ipcRenderer.invoke("app-icon:set", variant)
 });
